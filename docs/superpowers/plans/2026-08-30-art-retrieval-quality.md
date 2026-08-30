@@ -33,14 +33,14 @@
 
 **Interfaces:**
 - Consumes: existing `fts_expression`, `MemoryArtifact`, `EditionRecord`, and store connection helpers.
-- Produces: `RankedMemoryCandidate { artifact: MemoryArtifact, lexical_rank: usize }`, `RankedEditionCandidate { edition: EditionRecord, lexical_rank: usize }`, and `search_candidates(&[String], usize)` methods used by Task 2.
+- Produces: `RankedMemoryCandidate { artifact: MemoryArtifact, lexical_rank: usize }`, `RankedEditionCandidate { edition: EditionRecord, lexical_rank: usize }`, and `search_ranked_candidates(&[String], usize)` methods used by Task 2. Existing bare `search_candidates(&[String])` wrappers remain source-compatible.
 
 - [ ] **Step 1: Write failing private-store ranking tests**
 
 Add a test that inserts three active memories where a rare query term makes the expected BM25 order unambiguous, then requests two candidates and asserts IDs plus ranks:
 
 ```rust
-let ranked = vault.search_candidates(&["rareterm common".into(), "rareterm".into(), "common".into()], 2).unwrap();
+let ranked = vault.search_ranked_candidates(&["rareterm common".into(), "rareterm".into(), "common".into()], 2).unwrap();
 assert_eq!(ranked.len(), 2);
 assert_eq!(ranked[0].artifact.id, rare_title_id);
 assert_eq!(ranked[0].lexical_rank, 1);

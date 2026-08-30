@@ -49,6 +49,25 @@ fn anchor(agent: &AgentId) -> SourceAnchor {
     .unwrap()
 }
 
+fn ranked_memory(agent: &AgentId, title: &str, statement: &str) -> MemoryArtifact {
+    let mut artifact = MemoryArtifact::new(
+        agent.clone(),
+        title,
+        statement,
+        MemoryPayload::Semantic(SemanticPayload {
+            statement: statement.into(),
+            applicability: "ranked retrieval contract".into(),
+            exceptions: vec![],
+        }),
+        MemoryScope::Repository("agent-recall-trail".into()),
+        Sensitivity::Private,
+        Utc::now(),
+    )
+    .unwrap();
+    artifact.transition(MemoryStatus::Active, Utc::now()).unwrap();
+    artifact
+}
+
 #[test]
 fn vault_binds_database_identity_and_rejects_a_different_agent() {
     let root = tempdir().unwrap();
@@ -85,6 +104,39 @@ fn capture_is_atomic_and_idempotent() {
         vault.capture(&changed, &[anchor(&agent)], "capture-1"),
         Err(ArtError::DuplicateConflict)
     ));
+}
+
+#[test]
+fn ranked_search_keeps_bm25_order_and_broad_terms() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(root.path().join("art.sqlite3"), agent.clone()).unwrap();
+    let phrase = ranked_memory(&agent, "alpha beta", "alpha beta recovery");
+    let other = ranked_memory(&agent, "gamma", "gamma recovery");
+    vault
+        .capture(&phrase, &[anchor(&agent)], "ranked-phrase")
+        .unwrap();
+    vault
+        .capture(&other, &[anchor(&agent)], "ranked-other")
+        .unwrap();
+
+    let ranked = vault
+        .search_ranked_candidates(
+            &[
+                "alpha beta".into(),
+                "alpha".into(),
+                "beta".into(),
+                "gamma".into(),
+            ],
+            2,
+        )
+        .unwrap();
+
+    assert_eq!(ranked.len(), 2);
+    assert_eq!(ranked[0].artifact.id, phrase.id);
+    assert_eq!(ranked[0].lexical_rank, 1);
+    assert_eq!(ranked[1].artifact.id, other.id);
+    assert_eq!(ranked[1].lexical_rank, 2);
 }
 
 #[test]

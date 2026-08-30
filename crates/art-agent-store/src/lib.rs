@@ -38,6 +38,12 @@ pub struct AgentVaultDiagnostics {
     pub file_mode: Option<u32>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RankedMemoryCandidate {
+    pub artifact: MemoryArtifact,
+    pub lexical_rank: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryExportRecord {
     pub schema: String,
@@ -412,31 +418,48 @@ impl AgentVault {
         Ok(hex::encode(hasher.finalize()))
     }
 
-    pub fn search_candidates(&self, terms: &[String]) -> ArtResult<Vec<MemoryArtifact>> {
-        let connection = open_connection(&self.path)?;
-        let run = |expression: String| -> ArtResult<Vec<MemoryArtifact>> {
-            let mut statement = connection
-                .prepare(
-                    "SELECT a.artifact_json FROM memory_fts f JOIN memory_artifacts a ON a.id=f.memory_id WHERE memory_fts MATCH ?1 AND a.agent_id=?2 ORDER BY bm25(memory_fts),a.updated_at DESC LIMIT 512",
-                )
-                .map_err(map_db)?;
-            statement
-                .query_map(params![expression, self.agent_id.as_str()], |row| {
-                    row.get::<_, String>(0)
-                })
-                .map_err(map_db)?
-                .map(|row| {
-                    serde_json::from_str(&row.map_err(map_db)?)
-                        .map_err(|error| ArtError::Internal(error.to_string()))
-                })
-                .collect()
-        };
-        let exact = run(fts_expression(&terms[..terms.len().min(1)])?)?;
-        if exact.is_empty() && terms.len() > 1 {
-            run(fts_expression(terms)?)
-        } else {
-            Ok(exact)
+    pub fn search_ranked_candidates(
+        &self,
+        terms: &[String],
+        limit: usize,
+    ) -> ArtResult<Vec<RankedMemoryCandidate>> {
+        if !(1..=2_048).contains(&limit) {
+            return Err(ArtError::InvalidInput(
+                "candidate limit must be 1..=2048".into(),
+            ));
         }
+        let connection = open_connection(&self.path)?;
+        let expression = fts_expression(terms)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT a.artifact_json FROM memory_fts f JOIN memory_artifacts a ON a.id=f.memory_id WHERE memory_fts MATCH ?1 AND a.agent_id=?2 ORDER BY rank,a.updated_at DESC,a.id ASC LIMIT ?3",
+            )
+            .map_err(map_db)?;
+        let rows = statement
+            .query_map(
+                params![expression, self.agent_id.as_str(), limit],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(map_db)?;
+        rows.enumerate()
+            .map(|(index, row)| {
+                let artifact = serde_json::from_str(&row.map_err(map_db)?)
+                    .map_err(|error| ArtError::Internal(error.to_string()))?;
+                Ok(RankedMemoryCandidate {
+                    artifact,
+                    lexical_rank: index + 1,
+                })
+            })
+            .collect()
+    }
+
+    pub fn search_candidates(&self, terms: &[String]) -> ArtResult<Vec<MemoryArtifact>> {
+        self.search_ranked_candidates(terms, 512).map(|ranked| {
+            ranked
+                .into_iter()
+                .map(|candidate| candidate.artifact)
+                .collect()
+        })
     }
 
     pub fn rebuild_search_index(&self) -> ArtResult<u64> {

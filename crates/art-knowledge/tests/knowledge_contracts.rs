@@ -53,6 +53,32 @@ fn published_fixture(
     (root, edition)
 }
 
+fn publish_search_fixture(
+    vault: &KnowledgeVault,
+    agent: &AgentId,
+    key: &str,
+    title: &str,
+    body: &str,
+) -> art_knowledge::EditionRecord {
+    let proposal = vault
+        .propose(
+            agent,
+            KnowledgeDraft::minimal(key, title, body),
+            vec![source(agent)],
+            &format!("proposal-{key}"),
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "reviewed search fixture",
+        )
+        .unwrap();
+    vault.publish(&proposal.id, proposal.revision, true).unwrap()
+}
+
 #[test]
 fn proposal_locks_exact_sources_and_agents_cannot_approve() {
     let root = tempdir().unwrap();
@@ -83,6 +109,45 @@ fn proposal_locks_exact_sources_and_agents_cannot_approve() {
         ),
         Err(ArtError::PermissionDenied(_))
     ));
+}
+
+#[test]
+fn ranked_search_keeps_bm25_order_and_broad_terms() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [31_u8; 32]).unwrap();
+    let phrase = publish_search_fixture(
+        &vault,
+        &agent,
+        "retrieval.alpha-beta",
+        "alpha beta",
+        "alpha beta recovery",
+    );
+    let other = publish_search_fixture(
+        &vault,
+        &agent,
+        "retrieval.gamma",
+        "gamma",
+        "gamma recovery",
+    );
+
+    let ranked = vault
+        .search_ranked_candidates(
+            &[
+                "alpha beta".into(),
+                "alpha".into(),
+                "beta".into(),
+                "gamma".into(),
+            ],
+            2,
+        )
+        .unwrap();
+
+    assert_eq!(ranked.len(), 2);
+    assert_eq!(ranked[0].edition.edition_id, phrase.edition_id);
+    assert_eq!(ranked[0].lexical_rank, 1);
+    assert_eq!(ranked[1].edition.edition_id, other.edition_id);
+    assert_eq!(ranked[1].lexical_rank, 2);
 }
 
 #[test]
