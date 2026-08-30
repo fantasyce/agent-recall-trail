@@ -233,7 +233,7 @@ pub fn verify_backup(root: &Path) -> ArtResult<BackupManifest> {
         if file.path.starts_with("knowledge/editions/") && extension_is(&file.path, "json") {
             verify_edition(root, &file.path, &bytes)?;
         } else if file.path.starts_with("knowledge/events/") {
-            verify_event(&bytes)?;
+            verify_event(&file.path, &bytes)?;
         }
     }
 
@@ -411,35 +411,72 @@ fn verify_edition(root: &Path, manifest_relative: &str, manifest_bytes: &[u8]) -
     if manifest.schema != "art.knowledge.edition.v1" {
         return Err(ArtError::IndexDegraded);
     }
+    let components = Path::new(manifest_relative)
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let expected_manifest_name =
+        format!("{}-{}.json", manifest.edition_number, manifest.edition_id);
+    if components.len() != 4
+        || components[0] != "knowledge"
+        || components[1] != "editions"
+        || components[2] != manifest.knowledge_key
+        || components[3] != expected_manifest_name
+    {
+        return Err(ArtError::IndexDegraded);
+    }
     let markdown_relative = Path::new(manifest_relative).with_extension("md");
     let markdown_path = root.join(&markdown_relative);
     let markdown = fs::read_to_string(markdown_path).map_err(io_error)?;
+    let front_matter = markdown
+        .strip_prefix("---\n")
+        .and_then(|value| value.split_once("\n---\n").map(|(front, _)| front))
+        .ok_or(ArtError::IndexDegraded)?;
+    let fields = front_matter
+        .lines()
+        .filter_map(|line| line.split_once(": "))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let knowledge_body = markdown
         .split_once("## Knowledge\n\n")
         .map(|(_, body)| body.strip_suffix('\n').unwrap_or(body))
         .ok_or(ArtError::IndexDegraded)?;
     let manifest_sha256 = digest(manifest_bytes);
-    if digest(knowledge_body.as_bytes()) != manifest.markdown_body_sha256
-        || !markdown.contains(&format!("manifest_sha256: {manifest_sha256}"))
+    let edition_number = manifest.edition_number.to_string();
+    if fields.get("knowledge_key") != Some(&manifest.knowledge_key.as_str())
+        || fields.get("edition_id") != Some(&manifest.edition_id.as_str())
+        || fields.get("edition_number") != Some(&edition_number.as_str())
+        || fields.get("status") != Some(&"published")
+        || fields.get("manifest") != Some(&expected_manifest_name.as_str())
+        || fields.get("manifest_sha256") != Some(&manifest_sha256.as_str())
+        || digest(knowledge_body.as_bytes()) != manifest.markdown_body_sha256
     {
         return Err(ArtError::IndexDegraded);
     }
     Ok(())
 }
 
-fn verify_event(bytes: &[u8]) -> ArtResult<()> {
+fn verify_event(relative: &str, bytes: &[u8]) -> ArtResult<()> {
     let mut event: serde_json::Value = serde_json::from_slice(bytes).map_err(internal_error)?;
+    let event_id = event["event_id"]
+        .as_str()
+        .ok_or(ArtError::IndexDegraded)?
+        .to_owned();
     let stored_hash = event
         .as_object_mut()
         .and_then(|object| object.remove("event_hash"))
         .and_then(|value| value.as_str().map(str::to_owned))
         .ok_or(ArtError::IndexDegraded)?;
     let schema = event["schema"].as_str().ok_or(ArtError::IndexDegraded)?;
-    if !matches!(
-        schema,
-        "art.knowledge.revocation.v1" | "art.knowledge.supersession.v1"
-    ) || canonical_json_hash(&event) != stored_hash
-    {
+    let kind = match schema {
+        "art.knowledge.revocation.v1" => "revocation",
+        "art.knowledge.supersession.v1" => "supersession",
+        _ => return Err(ArtError::IndexDegraded),
+    };
+    let expected = format!("knowledge/events/{event_id}.{kind}.json");
+    if relative != expected || canonical_json_hash(&event) != stored_hash {
         return Err(ArtError::IndexDegraded);
     }
     Ok(())

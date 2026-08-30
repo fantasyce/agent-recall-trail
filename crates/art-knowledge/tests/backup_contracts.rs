@@ -4,8 +4,9 @@ use art_domain::{
 };
 use art_knowledge::{
     KnowledgeVault,
-    backup::{create_backup, restore_backup, verify_backup},
+    backup::{BackupManifest, create_backup, restore_backup, verify_backup},
 };
+use sha2::{Digest, Sha256};
 use std::{fs, str::FromStr};
 use tempfile::tempdir;
 
@@ -92,6 +93,23 @@ fn one_backup() -> (tempfile::TempDir, std::path::PathBuf) {
     (output_root, output)
 }
 
+fn rewrite_inventory_path(output: &std::path::Path, from: &str, to: &str) {
+    let manifest_path = output.join("art-backup.json");
+    let mut manifest: BackupManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    for file in &mut manifest.files {
+        if file.path == from {
+            to.clone_into(&mut file.path);
+        }
+    }
+    manifest
+        .files
+        .sort_by(|left, right| left.path.cmp(&right.path));
+    manifest.tree_sha256 =
+        hex::encode(Sha256::digest(serde_json::to_vec(&manifest.files).unwrap()));
+    fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+}
+
 #[test]
 fn verify_backup_accepts_only_the_exact_hashed_inventory() {
     let (_root, output) = one_backup();
@@ -126,6 +144,63 @@ fn verify_backup_rejects_unlisted_and_malformed_content() {
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
+    assert!(verify_backup(&output).is_err());
+}
+
+#[test]
+fn verify_backup_binds_edition_and_event_identity_to_canonical_paths() {
+    let (_root, output) = one_backup();
+    let manifest = verify_backup(&output).unwrap();
+    let old_key_dir = std::path::Path::new(&manifest.files[0].path)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let new_key_dir = std::path::Path::new("knowledge/editions/wrong.key");
+    fs::rename(output.join(&old_key_dir), output.join(new_key_dir)).unwrap();
+    for file in &manifest.files {
+        rewrite_inventory_path(
+            &output,
+            &file.path,
+            &new_key_dir
+                .join(std::path::Path::new(&file.path).file_name().unwrap())
+                .to_string_lossy(),
+        );
+    }
+    assert!(verify_backup(&output).is_err());
+
+    let (_root, output) = one_backup();
+    let manifest = verify_backup(&output).unwrap();
+    for file in &manifest.files {
+        let old = output.join(&file.path);
+        let extension = old.extension().unwrap().to_string_lossy();
+        let new_relative = old
+            .parent()
+            .unwrap()
+            .strip_prefix(&output)
+            .unwrap()
+            .join(format!("999-wrong-edition.{extension}"));
+        fs::rename(&old, output.join(&new_relative)).unwrap();
+        rewrite_inventory_path(&output, &file.path, &new_relative.to_string_lossy());
+    }
+    assert!(verify_backup(&output).is_err());
+
+    let source = published_vault();
+    let vault = KnowledgeVault::open(source.path(), [19_u8; 32]).unwrap();
+    let edition = vault.current("operations.backup").unwrap();
+    vault
+        .revoke(&edition.edition_id, "exercise event binding", true)
+        .unwrap();
+    let output_root = tempdir().unwrap();
+    let output = output_root.path().join("event-backup");
+    let manifest = create_backup(source.path(), &output, "art 0.1.1").unwrap();
+    let event = manifest
+        .files
+        .iter()
+        .find(|file| file.path.starts_with("knowledge/events/"))
+        .unwrap();
+    let wrong = "knowledge/events/arte_wrong.revocation.json";
+    fs::rename(output.join(&event.path), output.join(wrong)).unwrap();
+    rewrite_inventory_path(&output, &event.path, wrong);
     assert!(verify_backup(&output).is_err());
 }
 
