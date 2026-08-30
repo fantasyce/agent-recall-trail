@@ -7,6 +7,7 @@ use std::{
 use art_domain::{ArtError, ArtResult, memory::canonical_json_hash};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use ulid::Ulid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -249,6 +250,80 @@ pub fn verify_backup(root: &Path) -> ArtResult<BackupManifest> {
         return Err(ArtError::IndexDegraded);
     }
     Ok(manifest)
+}
+
+pub fn restore_backup(
+    source: &Path,
+    target_vault: &Path,
+    commitment_key: [u8; 32],
+) -> ArtResult<super::KnowledgeDiagnostics> {
+    if target_vault.exists() {
+        return Err(ArtError::DuplicateConflict);
+    }
+    let manifest = verify_backup(source)?;
+    let parent = target_vault
+        .parent()
+        .ok_or_else(|| ArtError::InvalidInput("restore target requires a parent".into()))?;
+    let name = target_vault
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| ArtError::InvalidInput("restore target requires a UTF-8 name".into()))?;
+    fs::create_dir_all(parent).map_err(io_error)?;
+    let staging = parent.join(format!("{name}.restore-staging-{}", Ulid::new()));
+    fs::create_dir(&staging).map_err(io_error)?;
+    set_private_dir(&staging)?;
+
+    let result = restore_backup_inner(source, &staging, commitment_key, &manifest);
+    match result {
+        Ok(diagnostics) => match fs::rename(&staging, target_vault) {
+            Ok(()) => Ok(diagnostics),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging);
+                Err(io_error(error))
+            }
+        },
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(error)
+        }
+    }
+}
+
+fn restore_backup_inner(
+    source: &Path,
+    staging: &Path,
+    commitment_key: [u8; 32],
+    manifest: &BackupManifest,
+) -> ArtResult<super::KnowledgeDiagnostics> {
+    let mut copied = Vec::new();
+    copy_tree(
+        &source.join("knowledge/editions"),
+        &source.join("knowledge/editions"),
+        &staging.join("editions"),
+        "editions",
+        &mut copied,
+    )?;
+    copy_tree(
+        &source.join("knowledge/events"),
+        &source.join("knowledge/events"),
+        &staging.join(".art/events"),
+        ".art/events",
+        &mut copied,
+    )?;
+    let vault = super::KnowledgeVault::open(staging, commitment_key)?;
+    vault.rebuild_projection()?;
+    let diagnostics = vault.diagnostics()?;
+    if !diagnostics.integrity_ok
+        || diagnostics.foreign_key_violations != 0
+        || !diagnostics.search_index_aligned
+        || !diagnostics.projection_hashes_ok
+        || diagnostics.projection_count != manifest.edition_count
+        || diagnostics.manifest_files_verified != manifest.edition_count
+        || diagnostics.event_files_verified != manifest.event_count
+    {
+        return Err(ArtError::IndexDegraded);
+    }
+    Ok(diagnostics)
 }
 
 fn collect_inventory(root: &Path) -> ArtResult<BTreeSet<String>> {

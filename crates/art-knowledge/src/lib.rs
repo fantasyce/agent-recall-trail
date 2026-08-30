@@ -397,6 +397,8 @@ impl KnowledgeVault {
             let _ = fs::remove_file(&manifest_path);
             return Err(error);
         }
+        let stored_markdown_path = self.portable_projection_path(&markdown_path)?;
+        let stored_manifest_path = self.portable_projection_path(&manifest_path)?;
         let transaction = connection.transaction().map_err(db_error)?;
         transaction
             .execute(
@@ -404,7 +406,7 @@ impl KnowledgeVault {
                 [&proposal.draft.knowledge_key],
             )
             .map_err(db_error)?;
-        transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![edition_id,proposal.draft.knowledge_key,edition_number,proposal.draft.title,markdown_path.to_string_lossy(),manifest_path.to_string_lossy(),markdown_sha256,manifest_sha256,published_at]).map_err(db_error)?;
+        transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![edition_id,proposal.draft.knowledge_key,edition_number,proposal.draft.title,stored_markdown_path,stored_manifest_path,markdown_sha256,manifest_sha256,published_at]).map_err(db_error)?;
         transaction
             .execute(
                 "INSERT INTO knowledge_fts(edition_id,search_text) VALUES (?1,?2)",
@@ -656,7 +658,9 @@ impl KnowledgeVault {
             .execute("DELETE FROM knowledge_events", [])
             .map_err(db_error)?;
         for record in &records {
-            transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at,revoked,current) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0,0)", params![record.edition_id,record.knowledge_key,record.edition_number,record.title,record.markdown_path.to_string_lossy(),record.manifest_path.to_string_lossy(),record.markdown_sha256,record.manifest_sha256,record.published_at]).map_err(db_error)?;
+            let stored_markdown_path = self.portable_projection_path(&record.markdown_path)?;
+            let stored_manifest_path = self.portable_projection_path(&record.manifest_path)?;
+            transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at,revoked,current) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0,0)", params![record.edition_id,record.knowledge_key,record.edition_number,record.title,stored_markdown_path,stored_manifest_path,record.markdown_sha256,record.manifest_sha256,record.published_at]).map_err(db_error)?;
             let markdown = fs::read_to_string(&record.markdown_path).map_err(io_error)?;
             transaction
                 .execute(
@@ -1076,14 +1080,54 @@ impl KnowledgeVault {
             knowledge_key,
             edition_number,
             title,
-            markdown_path: markdown_path.into(),
-            manifest_path: manifest_path.into(),
+            markdown_path: self.resolve_projection_path(&markdown_path)?,
+            manifest_path: self.resolve_projection_path(&manifest_path)?,
             markdown_sha256,
             manifest_sha256,
             published_at,
         };
         verify_record(&record)?;
         Ok(record)
+    }
+
+    fn portable_projection_path(&self, path: &Path) -> ArtResult<String> {
+        ensure_target(&self.root, path)?;
+        let relative = path
+            .strip_prefix(&self.root)
+            .map_err(|error| ArtError::PathConflict(error.to_string()))?;
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(ArtError::PathConflict(
+                "invalid portable edition path".into(),
+            ));
+        }
+        relative
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| ArtError::PathConflict("edition path is not UTF-8".into()))
+    }
+
+    fn resolve_projection_path(&self, stored: &str) -> ArtResult<PathBuf> {
+        let stored_path = PathBuf::from(stored);
+        let resolved = if stored_path.is_absolute() {
+            stored_path
+        } else {
+            if stored_path.as_os_str().is_empty()
+                || stored_path
+                    .components()
+                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            {
+                return Err(ArtError::PathConflict(
+                    "invalid portable edition path".into(),
+                ));
+            }
+            self.root.join(stored_path)
+        };
+        ensure_target(&self.root, &resolved)?;
+        Ok(resolved)
     }
 
     fn commit_event(

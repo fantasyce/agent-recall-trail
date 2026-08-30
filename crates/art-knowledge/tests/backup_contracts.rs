@@ -4,7 +4,7 @@ use art_domain::{
 };
 use art_knowledge::{
     KnowledgeVault,
-    backup::{create_backup, verify_backup},
+    backup::{create_backup, restore_backup, verify_backup},
 };
 use std::{fs, str::FromStr};
 use tempfile::tempdir;
@@ -157,4 +157,63 @@ fn verify_backup_rejects_symbolic_and_hard_link_aliases() {
     fs::remove_file(&canonical).unwrap();
     symlink(&target, &canonical).unwrap();
     assert!(verify_backup(&output).is_err());
+}
+
+#[test]
+fn restore_backup_rebuilds_an_exact_healthy_projection() {
+    let (_backup_root, backup) = one_backup();
+    let target_root = tempdir().unwrap();
+    let target = target_root.path().join("restored-vault");
+
+    let diagnostics = restore_backup(&backup, &target, [19_u8; 32]).unwrap();
+
+    assert!(diagnostics.integrity_ok);
+    assert!(diagnostics.projection_hashes_ok);
+    assert!(diagnostics.search_index_aligned);
+    assert_eq!(diagnostics.projection_count, 1);
+    assert_eq!(diagnostics.current_edition_count, 1);
+    assert_eq!(diagnostics.manifest_files_verified, 1);
+    let restored = KnowledgeVault::open(&target, [19_u8; 32]).unwrap();
+    assert_eq!(
+        restored.current("operations.backup").unwrap().title,
+        "ART backup"
+    );
+}
+
+#[test]
+fn restore_backup_refuses_overwrite_and_cleans_failed_staging() {
+    let (_backup_root, backup) = one_backup();
+    let target_root = tempdir().unwrap();
+    let existing = target_root.path().join("existing");
+    fs::create_dir(&existing).unwrap();
+    fs::write(existing.join("owner-data"), "preserve").unwrap();
+    assert!(restore_backup(&backup, &existing, [19_u8; 32]).is_err());
+    assert_eq!(
+        fs::read_to_string(existing.join("owner-data")).unwrap(),
+        "preserve"
+    );
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(backup.join("art-backup.json")).unwrap()).unwrap();
+    let markdown = manifest["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|item| {
+            let path = item["path"].as_str()?;
+            (std::path::Path::new(path).extension() == Some(std::ffi::OsStr::new("md")))
+                .then_some(path)
+        })
+        .unwrap();
+    fs::write(backup.join(markdown), "corrupted").unwrap();
+    let absent = target_root.path().join("absent");
+    assert!(restore_backup(&backup, &absent, [19_u8; 32]).is_err());
+    assert!(!absent.exists());
+    assert!(fs::read_dir(target_root.path()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("absent.restore-staging-")
+    }));
 }
