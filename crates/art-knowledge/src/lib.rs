@@ -1,5 +1,7 @@
 //! Human-reviewed proposals and immutable Knowledge Editions.
 
+pub mod backup;
+
 use std::{
     fs::{self, OpenOptions},
     io::Write,
