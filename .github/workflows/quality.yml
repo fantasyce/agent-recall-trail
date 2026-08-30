@@ -15,9 +15,12 @@ jobs:
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy && rustup default 1.98.0
       - name: Install verified ripgrep
         run: bash scripts/install_ci_ripgrep.sh "$RUNNER_TEMP/rg-bin" >> "$GITHUB_PATH"
+      - name: Install verified age
+        run: bash scripts/install_ci_age.sh "$RUNNER_TEMP/age-bin" >> "$GITHUB_PATH"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo build --release --locked -p art-cli
       - run: ART_BIN=target/release/art bash tests/scripts/test_release_version.sh && ART_BIN=target/release/art bash tests/scripts/test_plugin_surface.sh && ART_BIN=target/release/art bash tests/scripts/test_install_lifecycle.sh
+      - run: ART_BIN=target/release/art bash tests/scripts/test_backup_recovery.sh
       - run: bash tests/scripts/test_migration.sh && bash scripts/open_source_check.sh

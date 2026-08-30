@@ -9,6 +9,9 @@ Contract tests cover:
 - canonical Agent IDs, path containment, schemas, typed payloads, lifecycle edges, anchors, and assurance;
 - physical Vault isolation, identity mismatch, capture/revision/export idempotency, migration race, mid-transaction rollback, read-only/simulated disk-full behavior, eight concurrent writers, schema fail-closed, source invalidation, and operator lifecycle;
 - proposal source locks, human-only review, stale-source blocking, immutable publication, six crash-boundary recovery states, lifecycle event reconciliation, corruption detection, Git non-mutation, revocation, and path traversal;
+- deterministic allowlisted backup, corruption and link rejection, encrypted
+  control-authority round trips, atomic empty-home restore, and fresh-clone
+  projection rebuild;
 - exact/Jieba/bigram retrieval, candidate filtering, private/shared separation, and 64 Chinese golden queries;
 - six-tool MCP success paths, strict object output schemas, revision staleness, DB busy, shutdown, no-persist rejection, legacy/current protocol initialization, JSON-only debug stdout, and EOF/signals;
 - CLI confirmation boundaries, config priority, deep Doctor diagnostics, private permissions, integration previews, reviewable Markdown scan, safe copy, and import/export behavior;

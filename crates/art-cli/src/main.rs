@@ -13,7 +13,10 @@ use art_domain::{
     knowledge::{KnowledgeDraft, ProposalSourceLock, ProposalSourceType, ReviewActor, RiskLevel},
     memory::Sensitivity,
 };
-use art_knowledge::KnowledgeVault;
+use art_knowledge::{
+    KnowledgeVault,
+    backup::{create_backup, restore_backup, verify_backup},
+};
 use art_mcp::{ArtMcpServer, run_stdio_server};
 use art_retrieval::{RecallEngine, RecallRequest};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -118,11 +121,37 @@ enum Command {
         #[command(subcommand)]
         command: ExportCommand,
     },
+    Backup {
+        #[command(subcommand)]
+        command: BackupCommand,
+    },
     Reindex {
         #[arg(long)]
         agent: Option<String>,
         #[arg(long)]
         knowledge: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BackupCommand {
+    Create {
+        #[arg(long)]
+        output: PathBuf,
+    },
+    Verify {
+        #[arg(long)]
+        source: PathBuf,
+    },
+    Restore {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        target_home: PathBuf,
+        #[arg(long)]
+        commitment_key: PathBuf,
+        #[arg(long)]
+        confirm: bool,
     },
 }
 
@@ -450,6 +479,7 @@ async fn run(cli: Cli) -> ArtResult<()> {
         }
         Command::Import { command } => import_command(&paths, command),
         Command::Export { command } => export_command(&paths, command),
+        Command::Backup { command } => backup_command(&paths, command),
         Command::Reindex { agent, knowledge } => {
             let mut private_memories = None;
             if let Some(agent) = agent {
@@ -474,6 +504,113 @@ async fn run(cli: Cli) -> ArtResult<()> {
             print_json(
                 &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"knowledge":knowledge,"knowledge_editions":knowledge_editions}),
             )
+        }
+    }
+}
+
+fn backup_command(paths: &ArtPaths, command: BackupCommand) -> ArtResult<()> {
+    match command {
+        BackupCommand::Create { output } => {
+            ensure_initialized(paths)?;
+            let manifest =
+                create_backup(&paths.knowledge_vault(), &output, env!("CARGO_PKG_VERSION"))?;
+            print_json(&json!({
+                "schema":"art.cli.v1",
+                "status":"created",
+                "output":output,
+                "edition_count":manifest.edition_count,
+                "event_count":manifest.event_count,
+                "tree_sha256":manifest.tree_sha256
+            }))
+        }
+        BackupCommand::Verify { source } => {
+            let manifest = verify_backup(&source)?;
+            print_json(&json!({
+                "schema":"art.cli.v1",
+                "status":"verified",
+                "source":source,
+                "edition_count":manifest.edition_count,
+                "event_count":manifest.event_count,
+                "tree_sha256":manifest.tree_sha256
+            }))
+        }
+        BackupCommand::Restore {
+            source,
+            target_home,
+            commitment_key,
+            confirm,
+        } => restore_home(&source, &target_home, &commitment_key, confirm),
+    }
+}
+
+fn restore_home(
+    source: &Path,
+    target_home: &Path,
+    source_key: &Path,
+    confirm: bool,
+) -> ArtResult<()> {
+    if !confirm {
+        return Err(ArtError::PermissionDenied(
+            "backup restore requires --confirm".into(),
+        ));
+    }
+    if target_home.exists() {
+        return Err(ArtError::DuplicateConflict);
+    }
+    let target_paths = ArtPaths::from_explicit_root(target_home)?;
+    let key_metadata = fs::symlink_metadata(source_key).map_err(io_error)?;
+    if key_metadata.file_type().is_symlink() || !key_metadata.is_file() {
+        return Err(ArtError::PathConflict(
+            "commitment key must be a regular file".into(),
+        ));
+    }
+    reject_hard_link(&key_metadata)?;
+    if private_mode(source_key)?.is_some_and(|mode| mode != 0o600) {
+        return Err(ArtError::PermissionDenied(
+            "commitment key must have mode 0600".into(),
+        ));
+    }
+    let key: [u8; 32] = fs::read(source_key)
+        .map_err(io_error)?
+        .try_into()
+        .map_err(|_| ArtError::InvalidInput("invalid commitment key".into()))?;
+    let parent = target_home
+        .parent()
+        .ok_or_else(|| ArtError::InvalidInput("restore target requires a parent".into()))?;
+    fs::create_dir_all(parent).map_err(io_error)?;
+    let name = target_home
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| ArtError::InvalidInput("restore target requires a UTF-8 name".into()))?;
+    let mut nonce = [0_u8; 8];
+    getrandom::fill(&mut nonce).map_err(|error| ArtError::Internal(error.to_string()))?;
+    let staging = parent.join(format!("{name}.restore-staging-{}", hex::encode(nonce)));
+    let staging_paths = ArtPaths::from_explicit_root(&staging)?;
+    fs::create_dir(&staging).map_err(io_error)?;
+    set_private_dir(&staging)?;
+
+    let result = (|| {
+        write_private_new(&commitment_key_path(&staging_paths), &key)?;
+        let diagnostics = restore_backup(source, &staging_paths.knowledge_vault(), key)?;
+        if !diagnostics.integrity_ok || !diagnostics.search_index_aligned {
+            return Err(ArtError::IndexDegraded);
+        }
+        fs::rename(&staging, target_home).map_err(io_error)?;
+        Ok(diagnostics)
+    })();
+    match result {
+        Ok(diagnostics) => print_json(&json!({
+            "schema":"art.cli.v1",
+            "status":"restored",
+            "target_home":target_paths.root(),
+            "edition_count":diagnostics.projection_count,
+            "event_count":diagnostics.event_files_verified,
+            "integrity_ok":diagnostics.integrity_ok,
+            "search_index_aligned":diagnostics.search_index_aligned
+        })),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(error)
         }
     }
 }

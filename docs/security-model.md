@@ -22,7 +22,15 @@ Memory and knowledge are data, not instructions. Hosts must not elevate permissi
 
 ## Limits
 
-File permissions are not isolation from arbitrary code running as the same operating-system user. A Codex/DSH process with unrestricted filesystem capability can bypass the ART application boundary; use separate OS identities or an external sandbox for hostile Agents. ART does not encrypt data at rest, scan every possible secret encoding, authenticate a network peer, or provide remote multi-tenant isolation in v0.1.0.
+File permissions are not isolation from arbitrary code running as the same operating-system user. A Codex/DSH process with unrestricted filesystem capability can bypass the ART application boundary; use separate OS identities or an external sandbox for hostile Agents. ART does not encrypt live data at rest, scan every possible secret encoding, authenticate a network peer, or provide remote multi-tenant isolation in v0.1.1.
+
+The Git backup contains only reviewed immutable knowledge and lifecycle events.
+The non-rebuildable Control Store and commitment key enter Git only inside an
+age-encrypted recovery capsule bound to the knowledge tree hash. Agent Vaults,
+queries, Recall Bundles, source excerpts, plaintext keys, credentials, and
+SQLite WAL/SHM files are excluded. ART never reads an SSH private key; the
+operator supplies an age/SSH recipient for backup and an identity only during
+an explicit restore.
 
 ## Reporting
 

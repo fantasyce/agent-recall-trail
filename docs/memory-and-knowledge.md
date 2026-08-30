@@ -39,4 +39,4 @@ A Recall Bundle has separate `private_memories` and `knowledge_editions` arrays,
 
 ## Ranking
 
-ART v0.1.0 uses deterministic local retrieval: normalized exact matching, Unicode-aware tokens, Jieba segmentation, and CJK bigrams. Private and shared stores maintain separate persistent FTS5 projections, select bounded candidates locally, and evaluate eligibility before ranking. Both projections are rebuildable from authoritative memory artifacts or immutable Knowledge Editions and events. Vector status is explicitly `unavailable`; there is no silent embedding fallback.
+ART v0.1.1 uses deterministic local retrieval: normalized exact matching, Unicode-aware tokens, Jieba segmentation, and CJK bigrams. Private and shared stores maintain separate persistent FTS5 projections, select bounded candidates locally, and evaluate eligibility before ranking. Both projections are rebuildable from authoritative memory artifacts or immutable Knowledge Editions and events. Vector status is explicitly `unavailable`; there is no silent embedding fallback.

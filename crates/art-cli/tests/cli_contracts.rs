@@ -32,10 +32,126 @@ fn help_exposes_operator_and_mcp_surfaces() {
         "mcp",
         "import",
         "export",
+        "backup",
         "reindex",
     ] {
         assert!(help.contains(command), "missing {command}");
     }
+}
+
+#[test]
+fn backup_cli_creates_verifies_and_atomically_restores_a_new_home() {
+    let root = tempdir().unwrap();
+    let source_home = root.path().join("source-home");
+    let backup = root.path().join("backup");
+    let restored_home = root.path().join("restored-home");
+    assert!(
+        art()
+            .args(["--home", source_home.to_str().unwrap(), "init", "--confirm",])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let created = art()
+        .args([
+            "--home",
+            source_home.to_str().unwrap(),
+            "backup",
+            "create",
+            "--output",
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    assert!(
+        art()
+            .args(["backup", "verify", "--source", backup.to_str().unwrap(),])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let key = source_home.join("config/art/commitment.key");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let insecure_target = root.path().join("insecure-restored-home");
+        assert!(
+            !art()
+                .args([
+                    "backup",
+                    "restore",
+                    "--source",
+                    backup.to_str().unwrap(),
+                    "--target-home",
+                    insecure_target.to_str().unwrap(),
+                    "--commitment-key",
+                    key.to_str().unwrap(),
+                    "--confirm",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(!insecure_target.exists());
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert!(
+        !art()
+            .args([
+                "backup",
+                "restore",
+                "--source",
+                backup.to_str().unwrap(),
+                "--target-home",
+                restored_home.to_str().unwrap(),
+                "--commitment-key",
+                key.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(!restored_home.exists());
+
+    let restored = art()
+        .args([
+            "backup",
+            "restore",
+            "--source",
+            backup.to_str().unwrap(),
+            "--target-home",
+            restored_home.to_str().unwrap(),
+            "--commitment-key",
+            key.to_str().unwrap(),
+            "--confirm",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    assert!(restored_home.join("config/art/commitment.key").exists());
+    assert!(
+        restored_home
+            .join("data/art/knowledge-vault/art-control.sqlite3")
+            .exists()
+    );
+    assert!(!root.path().read_dir().unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("restore-staging")
+    }));
 }
 
 #[test]
