@@ -1,0 +1,25 @@
+{
+  "manifest_version":"0.3",
+  "name":"agent-recall-trail",
+  "display_name":"Agent Recall Trail",
+  "version":"@VERSION@",
+  "description":"Private Agent memory and human-reviewed shared knowledge.",
+  "long_description":"ART gives every Agent a physically separate private Recall Trail and exposes only immutable, human-reviewed Knowledge Editions for cross-Agent retrieval.",
+  "author":{"name":"Agent Recall Trail contributors","url":"https://github.com/fantasyce/agent-recall-trail"},
+  "repository":{"type":"git","url":"https://github.com/fantasyce/agent-recall-trail.git"},
+  "documentation":"https://github.com/fantasyce/agent-recall-trail/blob/main/docs/operations.md",
+  "support":"https://github.com/fantasyce/agent-recall-trail/issues",
+  "server":{"type":"binary","entry_point":"server/art-linux-amd64","mcp_config":{"command":"server/art-linux-amd64","args":["mcp","serve","--agent","codex-primary"],"env":{},"platform_overrides":{"darwin":{"command":"server/art-darwin-arm64","args":["mcp","serve","--agent","codex-primary"]}}}},
+  "tools":[
+    {"name":"art_recall","description":"Recall private Agent memory and reviewed shared knowledge."},
+    {"name":"art_read","description":"Read one authorized memory or Knowledge Edition."},
+    {"name":"art_memory_capture","description":"Capture one bounded conclusion in this Agent's private vault."},
+    {"name":"art_knowledge_propose","description":"Draft a knowledge proposal for later human review."},
+    {"name":"art_feedback","description":"Record bounded feedback on recalled evidence."},
+    {"name":"art_health","description":"Inspect the bound Agent runtime health."}
+  ],
+  "keywords":["agent memory","knowledge base","mcp","codex","dsh"],
+  "license":"Apache-2.0",
+  "compatibility":{"platforms":["darwin","linux"]},
+  "_meta":{"io.github.fantasyce.agent-recall-trail":{"build":{"commit":"@COMMIT@"}}}
+}

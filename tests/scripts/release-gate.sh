@@ -13,6 +13,9 @@ cargo build --release --locked
 ART_BIN=target/release/art bash tests/scripts/test_release_version.sh
 ART_BIN=target/release/art bash tests/scripts/test_plugin_surface.sh
 ART_BIN=target/release/art bash tests/scripts/test_install_lifecycle.sh
+bash scripts/test_site.sh
+bash scripts/test_launch_surface.sh
+bash scripts/open_source_check.sh
 python3 tests/scripts/stress_gate.py target/release/art
 cargo audit --deny warnings
 cargo metadata --format-version 1 --locked \

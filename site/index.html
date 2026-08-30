@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ART gives each coding Agent a private Recall Trail and shares only human-reviewed Knowledge Editions.">
+  <title>ART — Agent Recall Trail</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="shell">
+    <nav aria-label="Primary">
+      <a class="mark" href="https://github.com/fantasyce/agent-recall-trail">ART</a>
+      <div><a href="#model">Model</a><a href="#start">Start</a><a href="https://github.com/fantasyce/agent-recall-trail/blob/main/SECURITY.md">Security</a></div>
+    </nav>
+  </header>
+  <main>
+    <section class="hero shell">
+      <p class="eyebrow">AGENT RECALL TRAIL · v0.1.0</p>
+      <h1>Your Agent remembers. Shared knowledge is reviewed.</h1>
+      <p class="lead">Local-first memory and governed knowledge for Codex and DSH. One private trail per Agent; one immutable, human-approved record for what the team may share.</p>
+      <div class="actions"><a class="primary" href="https://github.com/fantasyce/agent-recall-trail/releases/latest">Download v0.1.0</a><a href="https://github.com/fantasyce/agent-recall-trail">View source</a></div>
+      <img src="art-provenance-trail.svg" alt="A private recall trail entering a human review gate before becoming a shared Knowledge Edition.">
+    </section>
+    <section id="model" class="grid shell" aria-labelledby="model-title">
+      <div><p class="eyebrow">TWO AUTHORITIES</p><h2 id="model-title">Memory remains personal. Knowledge earns permanence.</h2></div>
+      <article><span>01</span><h3>Private Recall Trails</h3><p>Each Agent writes to a physically separate vault. Nothing crosses Agent boundaries automatically.</p></article>
+      <article><span>02</span><h3>Knowledge Editions</h3><p>Only an explicit human review can publish an immutable Edition for multi-Agent retrieval.</p></article>
+      <article><span>03</span><h3>Bound evidence</h3><p>Provenance, source locks, revisions, and feedback stay inspectable. Recalled content is evidence, never instruction.</p></article>
+    </section>
+    <section id="start" class="start shell">
+      <p class="eyebrow">ONE LOCAL RUNTIME</p><h2>Built for Codex and DSH.</h2>
+      <pre><code>art init --confirm
+art agent create --id codex-primary --host codex
+art mcp serve --agent codex-primary</code></pre>
+      <p>Six bounded MCP tools cover recall, capture, read, feedback, proposal drafting, and health. Approval and publication stay operator-only.</p>
+    </section>
+  </main>
+  <footer class="shell"><span>Apache-2.0 · Local-first · No cloud account</span><a href="https://github.com/fantasyce/agent-recall-trail/blob/main/SECURITY.md">Report a vulnerability</a></footer>
+</body>
+</html>
