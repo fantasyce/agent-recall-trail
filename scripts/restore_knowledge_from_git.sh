@@ -8,6 +8,7 @@ fi
 art_bin="$1"; clone="$2"; identity="$3"; target="$4"
 for tool in sqlite3 age python3 shasum tar; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 1; }; done
 [[ -x "$art_bin" && -d "$clone/.git" && -f "$identity" && ! -e "$target" ]] || { echo "invalid restore input or target exists" >&2; exit 1; }
+[[ "$target" == /* && "$target" != / ]] || { echo "restore target must be a narrow absolute path" >&2; exit 1; }
 "$art_bin" backup verify --source "$clone" >/dev/null
 python3 - "$clone/art-backup.json" "$clone/recovery/recovery-manifest.json" "$clone/recovery/control-and-key.tar.age" <<'PY'
 import hashlib, json, sys
@@ -25,7 +26,12 @@ if len(m["recipient_fingerprint_sha256"]) != 64:
     raise SystemExit("invalid recipient fingerprint")
 PY
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/art-restore.XXXXXX")"
-trap 'find "$tmp" -depth -delete 2>/dev/null || true' EXIT
+target_parent="$(dirname "$target")"
+target_name="$(basename "$target")"
+mkdir -p "$target_parent"
+staging_home="$target_parent/.${target_name}.recovery-staging.$$.$RANDOM"
+[[ ! -e "$staging_home" ]] || { echo "restore staging collision" >&2; exit 1; }
+trap 'find "$tmp" -depth -delete 2>/dev/null || true; if [[ -n "${staging_home:-}" && -e "$staging_home" ]]; then find "$staging_home" -depth -delete 2>/dev/null || true; fi' EXIT
 chmod 700 "$tmp"
 age -d -i "$identity" -o "$tmp/capsule.tar" "$clone/recovery/control-and-key.tar.age"
 python3 - "$tmp/capsule.tar" "$tmp/capsule" <<'PY'
@@ -44,11 +50,13 @@ with tarfile.open(archive) as tf:
 PY
 [[ "$(wc -c < "$tmp/capsule/commitment.key" | tr -d ' ')" == "32" ]] || { echo "invalid recovered commitment key" >&2; exit 1; }
 [[ "$(sqlite3 "$tmp/capsule/art-control.sqlite3" 'PRAGMA integrity_check;')" == "ok" ]] || { echo "recovered Control Store is corrupt" >&2; exit 1; }
-"$art_bin" backup restore --source "$clone" --target-home "$target" --commitment-key "$tmp/capsule/commitment.key" --confirm >/dev/null
-control="$target/data/art/knowledge-vault/art-control.sqlite3"
+"$art_bin" backup restore --source "$clone" --target-home "$staging_home" --commitment-key "$tmp/capsule/commitment.key" --confirm >/dev/null
+control="$staging_home/data/art/knowledge-vault/art-control.sqlite3"
 find "$(dirname "$control")" -maxdepth 1 \( -name 'art-control.sqlite3-wal' -o -name 'art-control.sqlite3-shm' \) -delete
 install -m 0600 "$tmp/capsule/art-control.sqlite3" "$control"
 sqlite3 "$control" "PRAGMA foreign_keys=ON; DELETE FROM edition_projections; DELETE FROM knowledge_fts; DELETE FROM knowledge_events; DELETE FROM publish_intents; DELETE FROM event_intents;"
-"$art_bin" --home "$target" reindex --knowledge >/dev/null
-"$art_bin" --home "$target" doctor --json >/dev/null
+"$art_bin" --home "$staging_home" reindex --knowledge >/dev/null
+"$art_bin" --home "$staging_home" doctor --json >/dev/null
+mv "$staging_home" "$target"
+staging_home=""
 echo "ART knowledge restore verified"
