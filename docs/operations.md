@@ -37,6 +37,55 @@ without weakening the count, uniqueness, or hash checks.
 
 Private export uses `art.memory.export.v1` JSONL. Full artifacts and anchors require both `--include-private` and `--confirm`; re-import requires the exact Agent identity and `--confirm`, is idempotent by ID+revision, and rejects hash conflicts. Knowledge export copies immutable Edition and lifecycle files to a new owner-only directory; it excludes the private control database.
 
+## Backup and disaster recovery
+
+ART backup is an explicit owner operation, never an Agent or MCP action. First
+create or verify a deterministic canonical snapshot:
+
+```bash
+art --home /absolute/art-home backup create --output /new/snapshot
+art backup verify --source /new/snapshot
+art backup restore --source /snapshot --target-home /absent/art-home \
+  --commitment-key /secure/commitment.key --confirm
+```
+
+`create` includes only immutable Edition Markdown/manifests and lifecycle
+events. `verify` rejects missing, extra, unsupported, corrupt, symlinked, and
+hard-linked content. `restore` requires an absent target and a regular 32-byte
+mode-`0600` commitment key; it builds and verifies a sibling staging home
+before the atomic rename.
+
+For full disaster recovery, prepare a dedicated private Git repository and an
+age or SSH recipient file, then run:
+
+```bash
+bash scripts/backup_knowledge_to_git.sh \
+  /absolute/art /absolute/art-home /absolute/private-git-worktree \
+  /absolute/recipients.txt owner/repository --confirm
+git -C /absolute/private-git-worktree push origin main
+```
+
+The script checkpoints a consistent Control Store copy, combines it with the
+commitment key, encrypts both into the recovery capsule, binds the capsule to
+the knowledge tree hash, and commits only the documented allowlist. It never
+configures a remote and never pushes automatically. A successful commit or
+push is not recovery proof.
+
+Test recovery from a fresh clone into a target that does not exist:
+
+```bash
+bash scripts/restore_knowledge_from_git.sh \
+  /absolute/art /absolute/fresh-clone /secure/age-identity.txt \
+  /absolute/absent-art-home --confirm
+```
+
+The restore workflow validates both manifests, decrypts into an owner-only
+temporary directory, checks the SQLite backup, restores canonical knowledge,
+installs the recovered audit authority, rebuilds the portable projection, and
+runs Doctor. Plaintext recovery material is removed on success and failure.
+Agent Vaults are deliberately outside this backup and need an independent
+owner-approved private-memory backup policy if desired.
+
 ## Shutdown and recovery
 
 The stdio server exits on EOF, SIGINT, or SIGTERM, rejects new requests with `ART_SHUTTING_DOWN`, and waits at most three seconds. Hosts own restart and reconnect policy. SQLite uses WAL, foreign keys, a five-second busy timeout, migration serialization, and explicit checkpoints. Complete hash-valid publish files are safely committed on restart; partial files move to `.art/recovery/<intent-id>` and keep health degraded for human inspection. Recovery never exposes a partial Edition.

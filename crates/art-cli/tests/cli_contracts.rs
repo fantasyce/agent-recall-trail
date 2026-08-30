@@ -77,6 +77,31 @@ fn backup_cli_creates_verifies_and_atomically_restores_a_new_home() {
     );
 
     let key = source_home.join("config/art/commitment.key");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let insecure_target = root.path().join("insecure-restored-home");
+        assert!(
+            !art()
+                .args([
+                    "backup",
+                    "restore",
+                    "--source",
+                    backup.to_str().unwrap(),
+                    "--target-home",
+                    insecure_target.to_str().unwrap(),
+                    "--commitment-key",
+                    key.to_str().unwrap(),
+                    "--confirm",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(!insecure_target.exists());
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+    }
     assert!(
         !art()
             .args([

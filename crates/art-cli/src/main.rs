@@ -558,6 +558,18 @@ fn restore_home(
         return Err(ArtError::DuplicateConflict);
     }
     let target_paths = ArtPaths::from_explicit_root(target_home)?;
+    let key_metadata = fs::symlink_metadata(source_key).map_err(io_error)?;
+    if key_metadata.file_type().is_symlink() || !key_metadata.is_file() {
+        return Err(ArtError::PathConflict(
+            "commitment key must be a regular file".into(),
+        ));
+    }
+    reject_hard_link(&key_metadata)?;
+    if private_mode(source_key)?.is_some_and(|mode| mode != 0o600) {
+        return Err(ArtError::PermissionDenied(
+            "commitment key must have mode 0600".into(),
+        ));
+    }
     let key: [u8; 32] = fs::read(source_key)
         .map_err(io_error)?
         .try_into()

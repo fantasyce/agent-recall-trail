@@ -34,4 +34,4 @@ The MCP request never supplies owner identity. Starting a different Agent agains
 
 ## Deferred by design
 
-ART v0.1.0 has no network listener, background daemon, embeddings, cloud replication, hostile same-user sandbox, automatic physical deletion, or automatic knowledge approval. Recall uses local persistent lexical projections and reports cold and steady-state latency separately. Across Context schemas are thin optional contracts only; there is no AAA runtime adapter in this release.
+ART v0.1.1 has no network listener, background daemon, embeddings, cloud replication, hostile same-user sandbox, automatic physical deletion, or automatic knowledge approval. Recall uses local persistent lexical projections and reports cold and steady-state latency separately. Across Context schemas are thin optional contracts only; there is no AAA runtime adapter in this release. Shared Markdown, Edition manifests, lifecycle events, and their private Git history are authoritative; SQLite search/current projections are portable and rebuildable.
