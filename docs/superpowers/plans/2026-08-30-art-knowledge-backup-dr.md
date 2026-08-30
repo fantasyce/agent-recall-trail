@@ -372,7 +372,7 @@ push `main` and enable force-push/deletion protection.
 
 Clone into the task root, restore into an absent temporary ART home, and require
 Doctor to report 28 current Editions, aligned index, verified hashes, and no
-private Agent memory. Run representative `Fantasy VPS` and Chinese BBR recall.
+private Agent memory. Run representative English and Chinese knowledge recall.
 
 - [ ] **Step 5: Test fresh Codex and DSH identities against the restored home**
 
@@ -424,4 +424,3 @@ Remove only the task worktree, clones, restored test homes, plaintext recovery
 material, release downloads, sessions, branches already merged, and temporary
 archives. Re-run residue verification, disk usage, Git/worktree state, and
 formal ART Doctor.
-
