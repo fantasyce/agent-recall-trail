@@ -84,7 +84,7 @@ fn create_backup_inner(source: &Path, target: &Path, generator: &str) -> ArtResu
         &target.join("art-backup.json"),
         &serde_json::to_vec_pretty(&manifest).map_err(internal_error)?,
     )?;
-    Ok(manifest)
+    verify_backup(target)
 }
 
 fn copy_tree(

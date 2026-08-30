@@ -35,15 +35,21 @@ trap 'find "$tmp" -depth -delete 2>/dev/null || true; if [[ -n "${staging_home:-
 chmod 700 "$tmp"
 age -d -i "$identity" -o "$tmp/capsule.tar" "$clone/recovery/control-and-key.tar.age"
 python3 - "$tmp/capsule.tar" "$tmp/capsule" <<'PY'
-import os, stat, sys, tarfile
+import os, sys, tarfile
 archive, target = sys.argv[1:]
 with tarfile.open(archive) as tf:
     members = tf.getmembers()
-    assert sorted(m.name for m in members) == ["art-control.sqlite3", "commitment.key"]
-    assert all(m.isfile() and not (m.issym() or m.islnk()) for m in members)
+    if sorted(m.name for m in members) != ["art-control.sqlite3", "commitment.key"]:
+        raise SystemExit("unexpected recovery archive inventory")
+    if any(not m.isfile() or m.issym() or m.islnk() for m in members):
+        raise SystemExit("recovery archive contains a non-regular member")
+    if any(m.size > (1024 * 1024 * 1024 if m.name == "art-control.sqlite3" else 32) for m in members):
+        raise SystemExit("recovery archive member exceeds its size limit")
     os.mkdir(target, 0o700)
     for m in members:
-        src = tf.extractfile(m); assert src is not None
+        src = tf.extractfile(m)
+        if src is None:
+            raise SystemExit("recovery archive member cannot be read")
         out = os.path.join(target, m.name)
         with open(out, "xb") as f: f.write(src.read())
         os.chmod(out, 0o600)
@@ -54,9 +60,41 @@ PY
 control="$staging_home/data/art/knowledge-vault/art-control.sqlite3"
 find "$(dirname "$control")" -maxdepth 1 \( -name 'art-control.sqlite3-wal' -o -name 'art-control.sqlite3-shm' \) -delete
 install -m 0600 "$tmp/capsule/art-control.sqlite3" "$control"
-sqlite3 "$control" "PRAGMA foreign_keys=ON; DELETE FROM edition_projections; DELETE FROM knowledge_fts; DELETE FROM knowledge_events; DELETE FROM publish_intents; DELETE FROM event_intents;"
+python3 - "$control" "$staging_home/data/art/knowledge-vault" <<'PY'
+import os, sqlite3, sys
+database, vault = sys.argv[1:]
+connection = sqlite3.connect(database)
+try:
+    for table, column, marker, base in [
+        ("publish_intents", "target_dir", "/editions/", os.path.join(vault, "editions")),
+        ("event_intents", "target_path", "/.art/events/", os.path.join(vault, ".art/events")),
+    ]:
+        for row_id, state, old_path in connection.execute(f"SELECT id,state,{column} FROM {table}"):
+            if state != "committed" or marker not in old_path:
+                raise SystemExit("recovered Control Store contains a non-portable intent")
+            suffix = old_path.split(marker, 1)[1]
+            new_path = os.path.join(base, suffix)
+            connection.execute(f"UPDATE {table} SET {column}=? WHERE id=?", (new_path, row_id))
+    connection.executescript("DELETE FROM edition_projections; DELETE FROM knowledge_fts; DELETE FROM knowledge_events;")
+    connection.commit()
+finally:
+    connection.close()
+PY
 "$art_bin" --home "$staging_home" reindex --knowledge >/dev/null
-"$art_bin" --home "$staging_home" doctor --json >/dev/null
+"$art_bin" --home "$staging_home" doctor --json > "$tmp/doctor.json"
+python3 - "$tmp/doctor.json" "$clone/art-backup.json" <<'PY'
+import json, sys
+doctor = json.load(open(sys.argv[1])); backup = json.load(open(sys.argv[2]))
+knowledge = doctor.get("knowledge", {})
+if doctor.get("status") != "ok":
+    raise SystemExit("restored ART Doctor status is not ok")
+if knowledge.get("projection_count") != backup["edition_count"]:
+    raise SystemExit("restored ART Edition count mismatch")
+if knowledge.get("event_files_verified") != backup["event_count"]:
+    raise SystemExit("restored ART event count mismatch")
+if not knowledge.get("integrity_ok") or not knowledge.get("search_index_aligned") or not knowledge.get("projection_hashes_ok"):
+    raise SystemExit("restored ART knowledge diagnostics are degraded")
+PY
 mv "$staging_home" "$target"
 staging_home=""
 echo "ART knowledge restore verified"

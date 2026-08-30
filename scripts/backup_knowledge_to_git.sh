@@ -29,15 +29,19 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/art-backup.XXXXXX")"
 trap 'find "$tmp" -depth -delete 2>/dev/null || true' EXIT
 chmod 700 "$tmp"
 snapshot="$tmp/snapshot"
-"$art_bin" --home "$art_home" backup create --output "$snapshot" >/dev/null
-"$art_bin" backup verify --source "$snapshot" >/dev/null
 control="$art_home/data/art/knowledge-vault/art-control.sqlite3"
 key="$art_home/config/art/commitment.key"
 [[ -f "$control" && -f "$key" ]] || { echo "ART control authority is incomplete" >&2; exit 1; }
 pending="$(sqlite3 "$control" "SELECT (SELECT COUNT(*) FROM publish_intents WHERE state!='committed') + (SELECT COUNT(*) FROM event_intents WHERE state!='committed');")"
 [[ "$pending" == "0" ]] || { echo "pending ART intents block backup" >&2; exit 1; }
+"$art_bin" --home "$art_home" backup create --output "$snapshot" >/dev/null
+"$art_bin" backup verify --source "$snapshot" >/dev/null
 mkdir "$tmp/capsule"; chmod 700 "$tmp/capsule"
 sqlite3 "$control" ".backup '$tmp/capsule/art-control.sqlite3'"
+"$art_bin" --home "$art_home" backup create --output "$tmp/stability-check" >/dev/null
+pending="$(sqlite3 "$control" "SELECT (SELECT COUNT(*) FROM publish_intents WHERE state!='committed') + (SELECT COUNT(*) FROM event_intents WHERE state!='committed');")"
+[[ "$pending" == "0" ]] || { echo "ART changed while backup was captured" >&2; exit 1; }
+cmp -s "$snapshot/art-backup.json" "$tmp/stability-check/art-backup.json" || { echo "ART knowledge changed while backup was captured" >&2; exit 1; }
 install -m 0600 "$key" "$tmp/capsule/commitment.key"
 mkdir -p "$repo/recovery"; chmod 700 "$repo/recovery"
 COPYFILE_DISABLE=1 tar -C "$tmp/capsule" -cf - art-control.sqlite3 commitment.key | age -R "$recipient" -o "$repo/recovery/control-and-key.tar.age"

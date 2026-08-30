@@ -129,6 +129,19 @@ fn verify_backup_rejects_unlisted_and_malformed_content() {
     assert!(verify_backup(&output).is_err());
 }
 
+#[test]
+fn create_backup_rejects_a_corrupt_source_and_removes_the_target() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir_all(source.join("editions/corrupt")).unwrap();
+    fs::create_dir_all(source.join(".art/events")).unwrap();
+    fs::write(source.join("editions/corrupt/1-bad.json"), b"not-json").unwrap();
+    fs::write(source.join("editions/corrupt/1-bad.md"), b"not-an-edition").unwrap();
+    let target = root.path().join("backup");
+    assert!(create_backup(&source, &target, "art 0.1.1").is_err());
+    assert!(!target.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn verify_backup_rejects_symbolic_and_hard_link_aliases() {
