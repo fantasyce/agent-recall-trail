@@ -192,7 +192,14 @@ pub fn verify_backup(root: &Path) -> ArtResult<BackupManifest> {
             "backup inventory must be strictly sorted and unique".into(),
         ));
     }
-    let actual = collect_inventory(root)?;
+    let mut actual = collect_inventory(root)?;
+    for repository_metadata in [
+        "README.md",
+        "recovery/recovery-manifest.json",
+        "recovery/control-and-key.tar.age",
+    ] {
+        actual.remove(repository_metadata);
+    }
     let declared_set: BTreeSet<&str> = declared.iter().copied().collect();
     if actual.len() != declared_set.len()
         || actual
@@ -329,6 +336,14 @@ fn restore_backup_inner(
 fn collect_inventory(root: &Path) -> ArtResult<BTreeSet<String>> {
     fn visit(root: &Path, current: &Path, files: &mut BTreeSet<String>) -> ArtResult<()> {
         let metadata = fs::symlink_metadata(current).map_err(io_error)?;
+        if current == root.join(".git") {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(ArtError::PathConflict(
+                    "backup Git metadata must be a regular directory".into(),
+                ));
+            }
+            return Ok(());
+        }
         if metadata.file_type().is_symlink() {
             return Err(ArtError::PathConflict(
                 "symbolic links are not allowed".into(),
