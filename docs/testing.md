@@ -12,7 +12,8 @@ Contract tests cover:
 - deterministic allowlisted backup, corruption and link rejection, encrypted
   control-authority round trips, atomic empty-home restore, and fresh-clone
   projection rebuild;
-- exact/Jieba/bigram retrieval, candidate filtering, private/shared separation, and 64 Chinese golden queries;
+- BM25-first lexical ranking, exact/Jieba/bigram signals, bounded Top-K,
+  candidate filtering, private/shared separation, and 64 Chinese golden queries;
 - six-tool MCP success paths, strict object output schemas, revision staleness, DB busy, shutdown, no-persist rejection, legacy/current protocol initialization, JSON-only debug stdout, and EOF/signals;
 - CLI confirmation boundaries, config priority, deep Doctor diagnostics, private permissions, integration previews, reviewable Markdown scan, safe copy, and import/export behavior;
 - thin Across Context contract expiry, no-persist, and invalidation behavior without an AAA adapter.
@@ -30,5 +31,10 @@ Acceptance uses task-owned storage and temporary opt-in configuration only:
 7. Graceful EOF, abnormal disconnect, concurrency, repeated-query, file-permission, source-read-only, and residue checks.
 
 The reproducible local stress artifact runs 500 graceful sessions, 100 abnormal disconnects, 1,000 queries in one process, 8 concurrent clients, an idle-FD ceiling of 16, and a final healthy Doctor. The release performance dataset contains 10,000 private memories and 5,000 shared Editions; reports must retain startup, cold-index, capture p95, steady recall p50/p95/p99, and concurrent maximum separately.
+
+Public retrieval quality is separately gated on the full BEIR SciFact and
+NFCorpus test splits through the compiled `art recall` command. See
+[`testing-retrieval.md`](testing-retrieval.md) for the reproducible fixture,
+metrics, thresholds, isolation rules, and cleanup contract.
 
 Passing source tests alone is not host E2E. A host run passes only when the real installed Codex or DSH invokes the release ART child, returns the expected bound identity, and proves the requested private/shared visibility result.

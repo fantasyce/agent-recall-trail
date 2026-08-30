@@ -47,6 +47,45 @@ fn seed_memory(vault: &AgentVault, agent: &AgentId, title: &str, text: &str, key
     memory.id
 }
 
+fn publish_knowledge(
+    vault: &KnowledgeVault,
+    agent: &AgentId,
+    key: &str,
+    title: &str,
+    body: &str,
+) -> String {
+    let source = ProposalSourceLock {
+        source_type: ProposalSourceType::FileSnapshot,
+        owner_agent_id: None,
+        source_id: format!("reviewed-{key}"),
+        source_revision: Some(1),
+        source_content_hash: "a".repeat(64),
+        anchor_set_hash: None,
+        approved_excerpt_hash: Some("b".repeat(64)),
+        use_grant_id: None,
+    };
+    let proposal = vault
+        .propose(
+            agent,
+            KnowledgeDraft::minimal(key, title, body),
+            vec![source],
+            &format!("proposal-{key}"),
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "reviewed retrieval fixture",
+        )
+        .unwrap();
+    vault
+        .publish(&proposal.id, proposal.revision, true)
+        .unwrap()
+        .edition_id
+}
+
 #[test]
 fn chinese_exact_jieba_and_bigram_recall_private_memory() {
     let root = tempdir().unwrap();
@@ -65,6 +104,104 @@ fn chinese_exact_jieba_and_bigram_recall_private_memory() {
         let bundle = engine.recall(RecallRequest::new(query)).unwrap();
         assert_eq!(bundle.private_memories.len(), 1, "query={query}");
         assert_eq!(bundle.private_memories[0].origin, RecallOrigin::Memory);
+    }
+}
+
+#[test]
+fn bm25_rank_dominates_common_term_overlap() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    let knowledge = KnowledgeVault::open(root.path().join("knowledge"), [32; 32]).unwrap();
+    for index in 0..12 {
+        publish_knowledge(
+            &knowledge,
+            &agent,
+            &format!("retrieval.background-{index}"),
+            "common filler background",
+            "common filler background material",
+        );
+    }
+    let rare_id = publish_knowledge(
+        &knowledge,
+        &agent,
+        "retrieval.rare",
+        "rareterm",
+        "rareterm recovery evidence",
+    );
+    publish_knowledge(
+        &knowledge,
+        &agent,
+        "retrieval.common",
+        "common filler",
+        "common filler recovery evidence",
+    );
+    let engine = RecallEngine::new(private, knowledge);
+
+    let bundle = engine
+        .recall(RecallRequest::new("rareterm common filler"))
+        .unwrap();
+
+    assert_eq!(
+        bundle.knowledge_editions[0].subject_ref,
+        format!("knowledge:{rare_id}")
+    );
+    assert!(
+        bundle.knowledge_editions[0]
+            .match_reasons
+            .contains(&"bm25_rank".into())
+    );
+}
+
+#[test]
+fn configurable_result_depth_returns_ten_with_large_budget() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    let knowledge = KnowledgeVault::open(root.path().join("knowledge"), [33; 32]).unwrap();
+    for index in 0..12 {
+        publish_knowledge(
+            &knowledge,
+            &agent,
+            &format!("retrieval.depth-{index}"),
+            &format!("shared marker {index}"),
+            &format!("shared marker knowledge body {index}"),
+        );
+    }
+    let engine = RecallEngine::new(private, knowledge);
+
+    let default_bundle = engine.recall(RecallRequest::new("shared marker")).unwrap();
+    assert_eq!(default_bundle.knowledge_editions.len(), 3);
+    let expanded = engine
+        .recall(RecallRequest {
+            budget_tokens: 6_000,
+            max_private_results: Some(10),
+            max_knowledge_results: Some(10),
+            ..RecallRequest::new("shared marker")
+        })
+        .unwrap();
+
+    assert_eq!(expanded.knowledge_editions.len(), 10);
+    assert_eq!(expanded.omitted_knowledge, 2);
+}
+
+#[test]
+fn invalid_result_depth_fails_before_recall() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let engine = RecallEngine::new(
+        AgentVault::open(root.path().join("agent.sqlite3"), agent).unwrap(),
+        KnowledgeVault::open(root.path().join("knowledge"), [34; 32]).unwrap(),
+    );
+
+    for invalid in [0, 21] {
+        let error = engine
+            .recall(RecallRequest {
+                max_knowledge_results: Some(invalid),
+                ..RecallRequest::new("marker")
+            })
+            .unwrap_err();
+        assert!(matches!(error, art_domain::ArtError::InvalidInput(_)));
     }
 }
 

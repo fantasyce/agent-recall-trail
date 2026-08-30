@@ -1,5 +1,7 @@
 //! Admission-gated Chinese lexical retrieval and Recall Bundles.
 
+mod ranking;
+
 use std::{cmp::Ordering, collections::BTreeSet, fs, sync::OnceLock};
 
 use art_agent_store::AgentVault;
@@ -14,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 use unicode_normalization::UnicodeNormalization;
+
+use crate::ranking::rank_score;
 
 static JIEBA: OnceLock<Jieba> = OnceLock::new();
 
@@ -58,6 +62,8 @@ pub struct RecallRequest {
     pub query: String,
     pub include_candidates: bool,
     pub budget_tokens: usize,
+    pub max_private_results: Option<usize>,
+    pub max_knowledge_results: Option<usize>,
 }
 
 impl RecallRequest {
@@ -66,6 +72,8 @@ impl RecallRequest {
             query: query.into(),
             include_candidates: false,
             budget_tokens: 1_800,
+            max_private_results: None,
+            max_knowledge_results: None,
         }
     }
 }
@@ -90,6 +98,14 @@ struct LexicalQuery {
     bigrams: BTreeSet<String>,
 }
 
+#[derive(Debug)]
+struct LexicalMatch {
+    exact: bool,
+    token_coverage: f64,
+    bigram_coverage: f64,
+    reasons: Vec<String>,
+}
+
 impl RecallEngine {
     pub fn new(private_vault: AgentVault, knowledge_vault: KnowledgeVault) -> Self {
         Self {
@@ -105,12 +121,27 @@ impl RecallEngine {
                 "query is required and token budget must be 128..6000".into(),
             ));
         }
+        if [request.max_private_results, request.max_knowledge_results]
+            .into_iter()
+            .flatten()
+            .any(|depth| !(1..=20).contains(&depth))
+        {
+            return Err(ArtError::InvalidInput("result depth must be 1..=20".into()));
+        }
         let query = LexicalQuery::new(&request.query);
         let terms = query.search_terms();
+        let private_requested = request.max_private_results.unwrap_or(3);
+        let knowledge_requested = request.max_knowledge_results.unwrap_or(3);
+        let private_candidate_limit = (private_requested * 64).clamp(512, 2_048);
+        let knowledge_candidate_limit = (knowledge_requested * 64).clamp(512, 2_048);
         let now = Utc::now();
         let mut memories = Vec::new();
         let mut cautions = Vec::new();
-        for memory in self.private_vault.search_candidates(&terms)? {
+        for candidate in self
+            .private_vault
+            .search_ranked_candidates(&terms, private_candidate_limit)?
+        {
+            let memory = candidate.artifact;
             let text = memory_text(&memory);
             let lexical = LexicalDocument::new(&text);
             if !eligible_memory(&memory, request.include_candidates, now) {
@@ -124,21 +155,27 @@ impl RecallEngine {
                 }
                 continue;
             }
-            if let Some((score, reasons)) = lexical_match_indexed(&query, &lexical) {
+            if let Some(mut lexical_match) = lexical_match_indexed(&query, &lexical) {
                 let status = format!("{:?}", memory.status).to_lowercase();
                 let authority = if memory.status == MemoryStatus::Candidate {
                     0.75
                 } else {
                     1.0
                 };
+                lexical_match.reasons.insert(0, "bm25_rank".into());
                 memories.push(RecallItem {
                     subject_ref: format!("memory:{}@{}", memory.id, memory.current_revision),
                     title: memory.title.clone(),
                     excerpt: truncate(&memory.summary, 360),
                     origin: RecallOrigin::Memory,
                     status,
-                    match_reasons: reasons,
-                    score: score * authority,
+                    match_reasons: lexical_match.reasons,
+                    score: rank_score(
+                        candidate.lexical_rank,
+                        lexical_match.exact,
+                        lexical_match.token_coverage,
+                        lexical_match.bigram_coverage,
+                    ) * authority,
                 });
                 if unsafe_text(&text) {
                     cautions.push(format!(
@@ -149,18 +186,28 @@ impl RecallEngine {
             }
         }
         let mut knowledge = Vec::new();
-        for edition in self.knowledge_vault.search_candidates(&terms)? {
+        for candidate in self
+            .knowledge_vault
+            .search_ranked_candidates(&terms, knowledge_candidate_limit)?
+        {
+            let edition = candidate.edition;
             let text = knowledge_text(&edition)?;
             let lexical = LexicalDocument::new(&text);
-            if let Some((score, reasons)) = lexical_match_indexed(&query, &lexical) {
+            if let Some(mut lexical_match) = lexical_match_indexed(&query, &lexical) {
+                lexical_match.reasons.insert(0, "bm25_rank".into());
                 knowledge.push(RecallItem {
                     subject_ref: format!("knowledge:{}", edition.edition_id),
                     title: edition.title.clone(),
                     excerpt: truncate(&strip_frontmatter(&text), 480),
                     origin: RecallOrigin::Knowledge,
                     status: "published".into(),
-                    match_reasons: reasons,
-                    score: score * 1.2,
+                    match_reasons: lexical_match.reasons,
+                    score: rank_score(
+                        candidate.lexical_rank,
+                        lexical_match.exact,
+                        lexical_match.token_coverage,
+                        lexical_match.bigram_coverage,
+                    ) * 1.2,
                 });
                 if unsafe_text(&text) {
                     cautions.push(format!(
@@ -172,8 +219,9 @@ impl RecallEngine {
         }
         sort_items(&mut memories);
         sort_items(&mut knowledge);
-        let private_cap = 3_usize.min((request.budget_tokens * 35 / 100 / 120).max(1));
-        let knowledge_cap = 3_usize.min((request.budget_tokens * 55 / 100 / 160).max(1));
+        let private_cap = private_requested.min((request.budget_tokens * 35 / 100 / 120).max(1));
+        let knowledge_cap =
+            knowledge_requested.min((request.budget_tokens * 55 / 100 / 160).max(1));
         let omitted_private = memories.len().saturating_sub(private_cap);
         let omitted_knowledge = knowledge.len().saturating_sub(knowledge_cap);
         memories.truncate(private_cap);
@@ -265,27 +313,28 @@ fn tokenize(value: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn lexical_match_indexed(
-    query: &LexicalQuery,
-    document: &LexicalDocument,
-) -> Option<(f64, Vec<String>)> {
-    let mut score = 0.0;
+fn lexical_match_indexed(query: &LexicalQuery, document: &LexicalDocument) -> Option<LexicalMatch> {
     let mut reasons = Vec::new();
-    if document.normalized.contains(&query.normalized) {
-        score += 8.0;
+    let exact = document.normalized.contains(&query.normalized);
+    if exact {
         reasons.push("exact_or_substring".into());
     }
     let token_hits = query.tokens.intersection(&document.tokens).count();
+    let token_coverage = ratio(token_hits, query.tokens.len());
     if token_hits > 0 {
-        score += ratio(token_hits, query.tokens.len()) * 2.0;
         reasons.push("jieba_token".into());
     }
     let bigram_hits = query.bigrams.intersection(&document.bigrams).count();
+    let bigram_coverage = ratio(bigram_hits, query.bigrams.len());
     if bigram_hits > 0 {
-        score += ratio(bigram_hits, query.bigrams.len());
         reasons.push("cjk_bigram".into());
     }
-    (score > 0.0).then_some((score, reasons))
+    (exact || token_hits > 0 || bigram_hits > 0).then_some(LexicalMatch {
+        exact,
+        token_coverage,
+        bigram_coverage,
+        reasons,
+    })
 }
 
 fn ratio(numerator: usize, denominator: usize) -> f64 {

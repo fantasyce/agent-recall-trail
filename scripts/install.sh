@@ -38,8 +38,8 @@ if [[ ! -f "$binary" || ! -x "$binary" ]]; then
   echo 'ART binary must be a regular executable file' >&2
   exit 64
 fi
-if [[ "$($binary --version)" != 'art 0.1.1' ]]; then
-  echo 'ART installer accepts only the 0.1.1 binary' >&2
+if [[ "$($binary --version)" != 'art 0.2.0' ]]; then
+  echo 'ART installer accepts only the 0.2.0 binary' >&2
   exit 64
 fi
 
@@ -48,7 +48,7 @@ chmod 700 "$art_home/config/art" "$art_home/data/art" "$art_home/logs/art"
 staging="$(mktemp -d "$art_home/.art-install.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
 install -m 0755 "$binary" "$staging/art"
-test "$("$staging/art" --version)" = 'art 0.1.1'
+test "$("$staging/art" --version)" = 'art 0.2.0'
 mv -f "$staging/art" "$art_home/bin/art"
 
 config_tmp="$art_home/config/art/.config.json.tmp.$$"
@@ -73,4 +73,4 @@ link_tmp="$(dirname "$link_path")/.art-link.$$"
 ln -s "$art_home/bin/art" "$link_tmp"
 mv -f "$link_tmp" "$link_path"
 
-echo "installed ART 0.1.1 at $art_home/bin/art"
+echo "installed ART 0.2.0 at $art_home/bin/art"

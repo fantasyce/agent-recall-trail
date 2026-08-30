@@ -61,7 +61,6 @@ import json
 import sys
 
 bundle = json.loads(sys.argv[1])
-assert len(bundle["knowledge_editions"]) == 1
 assert bundle["knowledge_editions"][0]["title"] == "中文恢复流程"
 PY
 

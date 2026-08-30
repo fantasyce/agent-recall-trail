@@ -40,6 +40,12 @@ pub struct EditionRecord {
     pub published_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RankedEditionCandidate {
+    pub edition: EditionRecord,
+    pub lexical_rank: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeDiagnostics {
     pub integrity_ok: bool,
@@ -460,23 +466,43 @@ impl KnowledgeVault {
         ids.map(|id| self.read(&id.map_err(db_error)?)).collect()
     }
 
-    pub fn search_candidates(&self, terms: &[String]) -> ArtResult<Vec<EditionRecord>> {
-        let connection = self.connection()?;
-        let run = |expression: String| -> ArtResult<Vec<String>> {
-            let mut statement = connection.prepare(
-                "SELECT p.edition_id FROM knowledge_fts f JOIN edition_projections p ON p.edition_id=f.edition_id WHERE knowledge_fts MATCH ?1 AND p.current=1 AND p.revoked=0 ORDER BY bm25(knowledge_fts),p.published_at DESC LIMIT 512",
-            ).map_err(db_error)?;
-            statement
-                .query_map([expression], |row| row.get(0))
-                .map_err(db_error)?
-                .collect::<Result<_, _>>()
-                .map_err(db_error)
-        };
-        let mut ids = run(fts_expression(&terms[..terms.len().min(1)])?)?;
-        if ids.is_empty() && terms.len() > 1 {
-            ids = run(fts_expression(terms)?)?;
+    pub fn search_ranked_candidates(
+        &self,
+        terms: &[String],
+        limit: usize,
+    ) -> ArtResult<Vec<RankedEditionCandidate>> {
+        if !(1..=2_048).contains(&limit) {
+            return Err(ArtError::InvalidInput(
+                "candidate limit must be 1..=2048".into(),
+            ));
         }
-        ids.into_iter().map(|id| self.read(&id)).collect()
+        let connection = self.connection()?;
+        let expression = fts_expression(terms)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT p.edition_id FROM knowledge_fts f JOIN edition_projections p ON p.edition_id=f.edition_id WHERE knowledge_fts MATCH ?1 AND p.current=1 AND p.revoked=0 ORDER BY rank,p.published_at DESC,p.edition_id ASC LIMIT ?2",
+            )
+            .map_err(db_error)?;
+        let ids = statement
+            .query_map(params![expression, limit], |row| row.get::<_, String>(0))
+            .map_err(db_error)?;
+        ids.enumerate()
+            .map(|(index, id)| {
+                Ok(RankedEditionCandidate {
+                    edition: self.read(&id.map_err(db_error)?)?,
+                    lexical_rank: index + 1,
+                })
+            })
+            .collect()
+    }
+
+    pub fn search_candidates(&self, terms: &[String]) -> ArtResult<Vec<EditionRecord>> {
+        self.search_ranked_candidates(terms, 512).map(|ranked| {
+            ranked
+                .into_iter()
+                .map(|candidate| candidate.edition)
+                .collect()
+        })
     }
 
     pub fn rebuild_search_index(&self) -> ArtResult<u64> {

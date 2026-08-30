@@ -96,6 +96,10 @@ enum Command {
         budget_tokens: usize,
         #[arg(long)]
         include_candidates: bool,
+        #[arg(long)]
+        max_private_results: Option<usize>,
+        #[arg(long)]
+        max_knowledge_results: Option<usize>,
     },
     Memory {
         #[command(subcommand)]
@@ -451,12 +455,16 @@ async fn run(cli: Cli) -> ArtResult<()> {
             json: _,
             budget_tokens,
             include_candidates,
+            max_private_results,
+            max_knowledge_results,
         } => {
             let (vault, knowledge) = runtime(&paths, &agent)?;
             print_json(&RecallEngine::new(vault, knowledge).recall(RecallRequest {
                 query,
                 include_candidates,
                 budget_tokens,
+                max_private_results,
+                max_knowledge_results,
             })?)
         }
         Command::Memory { command } => memory_command(&paths, command),

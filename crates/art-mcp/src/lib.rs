@@ -36,6 +36,12 @@ pub struct RecallInput {
     pub include_candidates: bool,
     #[serde(default = "default_budget")]
     pub budget_tokens: usize,
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 20))]
+    pub max_private_results: Option<usize>,
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 20))]
+    pub max_knowledge_results: Option<usize>,
 }
 
 const fn default_budget() -> usize {
@@ -194,6 +200,8 @@ impl ArtMcpServer {
                 query: input.query,
                 include_candidates: input.include_candidates,
                 budget_tokens: input.budget_tokens,
+                max_private_results: input.max_private_results,
+                max_knowledge_results: input.max_knowledge_results,
             })
             .map_err(tool_error)?;
         let value = serde_json::to_value(bundle)
