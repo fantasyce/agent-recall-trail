@@ -76,7 +76,9 @@ fn publish_search_fixture(
             "reviewed search fixture",
         )
         .unwrap();
-    vault.publish(&proposal.id, proposal.revision, true).unwrap()
+    vault
+        .publish(&proposal.id, proposal.revision, true)
+        .unwrap()
 }
 
 #[test]
@@ -123,13 +125,8 @@ fn ranked_search_keeps_bm25_order_and_broad_terms() {
         "alpha beta",
         "alpha beta recovery",
     );
-    let other = publish_search_fixture(
-        &vault,
-        &agent,
-        "retrieval.gamma",
-        "gamma",
-        "gamma recovery",
-    );
+    let other =
+        publish_search_fixture(&vault, &agent, "retrieval.gamma", "gamma", "gamma recovery");
 
     let ranked = vault
         .search_ranked_candidates(

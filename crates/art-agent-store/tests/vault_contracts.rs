@@ -64,7 +64,9 @@ fn ranked_memory(agent: &AgentId, title: &str, statement: &str) -> MemoryArtifac
         Utc::now(),
     )
     .unwrap();
-    artifact.transition(MemoryStatus::Active, Utc::now()).unwrap();
+    artifact
+        .transition(MemoryStatus::Active, Utc::now())
+        .unwrap();
     artifact
 }
 

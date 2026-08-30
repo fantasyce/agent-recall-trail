@@ -436,10 +436,9 @@ impl AgentVault {
             )
             .map_err(map_db)?;
         let rows = statement
-            .query_map(
-                params![expression, self.agent_id.as_str(), limit],
-                |row| row.get::<_, String>(0),
-            )
+            .query_map(params![expression, self.agent_id.as_str(), limit], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(map_db)?;
         rows.enumerate()
             .map(|(index, row)| {
