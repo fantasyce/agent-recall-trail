@@ -345,8 +345,7 @@ git commit -m "feat: add bounded ART recall result depth"
 ### Task 4: Check in a reproducible BEIR product-path release gate
 
 **Files:**
-- Create: `crates/art-cli/tests/beir_quality_contract.rs`
-- Modify: `crates/art-cli/Cargo.toml`
+- Create: `scripts/benchmark_beir_retrieval.py`
 - Create: `scripts/download_beir_retrieval_fixtures.sh`
 - Create: `scripts/run_beir_retrieval_benchmark.sh`
 - Create: `docs/testing-retrieval.md`
@@ -356,44 +355,50 @@ git commit -m "feat: add bounded ART recall result depth"
 - Consumes: compiled `art` CLI with Task 3 flags and operator-provided fixture root.
 - Produces: aggregate JSON with dataset counts, Recall/MRR/nDCG/Accuracy at 1/3/10, latency percentiles, ART version, and pass/fail gates.
 
-- [ ] **Step 1: Write the ignored benchmark contract and observe baseline failure**
+- [x] **Step 1: Write the product-path benchmark contract and observe baseline failure**
 
-Implement an ignored test that requires `ART_BEIR_DATASETS`, verifies:
+Implement a standalone, standard-library benchmark harness that accepts an
+explicit dataset root, candidate binary, and new result path. The fixture
+download verifies:
 
 ```text
 scifact.zip   md5 5f7d1de60b170fc8027bb7898e2efca1
 nfcorpus.zip  md5 a89dba18a62ef92f7d323ec890a0d38d
 ```
 
-It must parse `corpus.jsonl`, `queries.jsonl`, and `qrels/test.tsv`, construct only a temporary Knowledge Vault, invoke the product path selected by `ART_BENCH_ART` with top ten, and assert the four spec thresholds. Run it first with `ART_BENCH_ART=/Users/fanhcy/.local/bin/art` to prove the installed 0.1.1 baseline fails, then omit that override so `CARGO_BIN_EXE_art` selects the candidate binary.
+It must parse `corpus.jsonl`, `queries.jsonl`, and `qrels/test.tsv`, construct
+only a temporary Knowledge Vault, invoke the selected compiled product path
+with top ten, and assert the spec thresholds. The previously recorded installed
+0.1.1 baseline supplies the RED comparison; the candidate runner supplies GREEN.
 
 Run:
 
 ```bash
-ART_BEIR_DATASETS=/private/tmp/art-beir-fixtures ART_BENCH_ART=/Users/fanhcy/.local/bin/art cargo test -p art-cli --test beir_quality_contract --release -- --ignored --nocapture
+bash scripts/run_beir_retrieval_benchmark.sh /private/tmp/art-beir-fixtures /private/tmp/art-beir-results.json
 ```
 
-Expected: before the result-depth implementation, fail because the compiled CLI rejects `--max-knowledge-results`; after Task 3, proceed through the complete metric assertions.
+Expected: the old installed binary cannot supply ten results; after Task 3, the
+candidate completes the full metric assertions.
 
-- [ ] **Step 2: Add safe fixture download and benchmark runner scripts**
+- [x] **Step 2: Add safe fixture download and benchmark runner scripts**
 
 The download script accepts an explicit new output directory, downloads only the two official BEIR archives, verifies the exact MD5 values before extraction, and refuses symlinks/existing non-empty targets. The runner requires an explicit fixture root and output JSON path, sets a task-owned temporary ART home, and never defaults to `~/.across`.
 
-- [ ] **Step 3: Add documentation and repository exclusions**
+- [x] **Step 3: Add documentation and repository exclusions**
 
 Document dataset licensing responsibility, exact commands, metric formulas, expected counts, thresholds, isolation, and cleanup. Ignore `datasets/beir/`, `benchmarks/output/`, generated Vaults, and raw TREC run files.
 
-- [ ] **Step 4: Run the final benchmark and verify GREEN**
+- [x] **Step 4: Run the final benchmark and verify GREEN**
 
 Run:
 
 ```bash
-ART_BEIR_DATASETS=/private/tmp/art-beir-fixtures cargo test -p art-cli --test beir_quality_contract --release -- --ignored --nocapture
+bash scripts/run_beir_retrieval_benchmark.sh /private/tmp/art-beir-fixtures /private/tmp/art-beir-results.json
 ```
 
 Expected: SciFact Recall@10 >= 0.76 and nDCG@10 >= 0.64; NFCorpus Recall@10 >= 0.14 and nDCG@10 >= 0.29; all @3 metrics meet the non-regression gates.
 
-- [ ] **Step 5: Verify no corpus or private data is staged and commit**
+- [x] **Step 5: Verify no corpus or private data is staged and commit**
 
 Run:
 
@@ -407,7 +412,7 @@ Expected: only harness, scripts, documentation, and ignore rules are changed; no
 Commit:
 
 ```bash
-git add .gitignore crates/art-cli/Cargo.toml crates/art-cli/tests/beir_quality_contract.rs scripts/download_beir_retrieval_fixtures.sh scripts/run_beir_retrieval_benchmark.sh docs/testing-retrieval.md
+git add .gitignore scripts/benchmark_beir_retrieval.py scripts/download_beir_retrieval_fixtures.sh scripts/run_beir_retrieval_benchmark.sh docs/testing-retrieval.md
 git commit -m "test: gate ART retrieval quality with BEIR"
 ```
 
@@ -449,7 +454,7 @@ Run:
 
 ```bash
 bash scripts/open_source_check.sh
-bash scripts/release_gate.sh
+bash tests/scripts/release-gate.sh
 ```
 
 Expected: both exit zero; no credentials, absolute developer paths, benchmark corpora, Vaults, or test-only data enter release payloads.
