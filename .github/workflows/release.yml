@@ -1,0 +1,63 @@
+name: Release
+on:
+  push: {tags: ['v*']}
+permissions: {contents: read}
+concurrency: {group: 'release-${{ github.ref }}', cancel-in-progress: false}
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-14, target: darwin_arm64}
+          - {runner: ubuntu-24.04, target: linux_amd64}
+    runs-on: '${{ matrix.runner }}'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {fetch-depth: 0}
+      - run: rustup toolchain install 1.98.0 --profile minimal && rustup default 1.98.0
+      - name: Verify exact main tag
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$GITHUB_REF_NAME" = v0.1.0
+          test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$(git rev-parse origin/main)"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+      - run: cargo test --workspace --all-features && cargo build --release --locked -p art-cli
+      - name: Build native archive
+        env: {ART_RELEASE_COMMIT: '${{ github.sha }}'}
+        run: bash scripts/build_release_assets.sh "$RUNNER_TEMP/dist" '${{ matrix.target }}' target/release/art
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with: {name: 'release-native-${{ matrix.target }}', path: '${{ runner.temp }}/dist/agent-recall-trail_0.1.0_${{ matrix.target }}.tar.gz', if-no-files-found: error, retention-days: 1}
+  assemble:
+    needs: native
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, id-token: write, attestations: write}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {fetch-depth: 0}
+      - run: rustup toolchain install 1.98.0 --profile minimal && rustup default 1.98.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with: {pattern: 'release-native-*', path: '${{ runner.temp }}/dist', merge-multiple: true}
+      - name: Assemble aggregate assets
+        env: {ART_RELEASE_COMMIT: '${{ github.sha }}'}
+        run: |
+          cargo build --release --locked -p art-cli
+          bash scripts/build_release_assets.sh "$RUNNER_TEMP/dist" linux_amd64 target/release/art
+          bash scripts/verify_release_assets.sh "$RUNNER_TEMP/dist" 0.1.0 "$GITHUB_SHA"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with: {subject-path: '${{ runner.temp }}/dist/*'}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with: {name: agent-recall-trail-v0.1.0, path: '${{ runner.temp }}/dist/*', if-no-files-found: error, retention-days: 30}
+  publish:
+    needs: assemble
+    runs-on: ubuntu-24.04
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with: {name: agent-recall-trail-v0.1.0, path: dist}
+      - name: Publish verified release
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title 'Agent Recall Trail 0.1.0' --generate-notes

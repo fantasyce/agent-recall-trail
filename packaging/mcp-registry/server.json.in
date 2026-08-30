@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.fantasyce/agent-recall-trail",
+  "title": "Agent Recall Trail",
+  "description": "Private Agent memory and human-reviewed shared knowledge.",
+  "version": "@VERSION@",
+  "websiteUrl": "https://fantasyce.github.io/agent-recall-trail/",
+  "repository": {"url":"https://github.com/fantasyce/agent-recall-trail","source":"github"},
+  "packages": [{
+    "registryType": "mcpb",
+    "identifier": "https://github.com/fantasyce/agent-recall-trail/releases/download/v@VERSION@/agent-recall-trail_@VERSION@.mcpb",
+    "version": "@VERSION@",
+    "fileSha256": "@MCPB_SHA256@",
+    "transport": {"type":"stdio"}
+  }]
+}

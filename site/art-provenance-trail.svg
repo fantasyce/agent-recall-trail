@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img">
+  <title>ART provenance trail</title><desc>A private Agent memory trail passes through a human review gate and becomes a shared immutable Knowledge Edition.</desc>
+  <rect width="1200" height="420" fill="#ece8dc"/><path d="M70 212h310" stroke="#2f6b5f" stroke-width="4"/><path d="M820 212h310" stroke="#17201d" stroke-width="4"/>
+  <circle cx="84" cy="212" r="18" fill="#2f6b5f"/><circle cx="180" cy="212" r="11" fill="#2f6b5f"/><circle cx="275" cy="212" r="7" fill="#2f6b5f"/>
+  <rect x="380" y="70" width="440" height="284" rx="4" fill="#f3f0e8" stroke="#17201d" stroke-width="2"/><text x="600" y="145" text-anchor="middle" font-family="Georgia,serif" font-size="30" fill="#17201d">Human review gate</text><text x="600" y="194" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#59615e">source lock · revision · approval</text>
+  <path d="M520 252l48 48 120-126" fill="none" stroke="#2f6b5f" stroke-width="12" stroke-linecap="square"/><rect x="925" y="155" width="150" height="114" fill="#17201d"/><text x="1000" y="203" text-anchor="middle" font-family="Georgia,serif" font-size="20" fill="#f3f0e8">Knowledge</text><text x="1000" y="232" text-anchor="middle" font-family="Georgia,serif" font-size="20" fill="#f3f0e8">Edition</text>
+  <text x="70" y="310" font-family="sans-serif" font-size="15" fill="#2f6b5f">PRIVATE RECALL TRAIL</text><text x="922" y="310" font-family="sans-serif" font-size="15" fill="#17201d">SHARED, IMMUTABLE</text>
+</svg>
