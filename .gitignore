@@ -8,3 +8,4 @@
 /datasets/beir/
 /benchmarks/output/
 *.run.trec
+/.worktrees/
