@@ -6,7 +6,7 @@ for path in \
   docs/launch/launch-article.md docs/launch/faq.md docs/launch/community-posts.md \
   docs/launch/maintainer-outreach.md docs/launch/showcase-submission.md \
   docs/launch/launch-manifest.json packaging/mcp-registry/server.json.in \
-  scripts/build_release_assets.sh scripts/verify_release_assets.sh scripts/open_source_check.sh \
+  scripts/build_release_binary.sh scripts/build_release_assets.sh scripts/verify_release_assets.sh scripts/open_source_check.sh \
   .github/workflows/quality.yml .github/workflows/release.yml .github/workflows/publish-mcp.yml; do
   [[ -s "$repo_dir/$path" ]] || { echo "missing launch surface: $path" >&2; exit 1; }
 done

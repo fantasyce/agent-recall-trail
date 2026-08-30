@@ -24,7 +24,7 @@ jobs:
           test "$GITHUB_REF_NAME" = v0.2.0
           test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$(git rev-parse origin/main)"
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
-      - run: cargo test --workspace --all-features && cargo build --release --locked -p art-cli
+      - run: cargo test --workspace --all-features && bash scripts/build_release_binary.sh
       - name: Build native archive
         env: {ART_RELEASE_COMMIT: '${{ github.sha }}'}
         run: bash scripts/build_release_assets.sh "$RUNNER_TEMP/dist" '${{ matrix.target }}' target/release/art
@@ -43,7 +43,7 @@ jobs:
       - name: Assemble aggregate assets
         env: {ART_RELEASE_COMMIT: '${{ github.sha }}'}
         run: |
-          cargo build --release --locked -p art-cli
+          bash scripts/build_release_binary.sh
           bash scripts/build_release_assets.sh "$RUNNER_TEMP/dist" linux_amd64 target/release/art
           bash scripts/verify_release_assets.sh "$RUNNER_TEMP/dist" 0.2.0 "$GITHUB_SHA"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
