@@ -426,7 +426,7 @@ git commit -m "test: gate ART retrieval quality with BEIR"
 - Consumes: Tasks 1-4 and their aggregate benchmark JSON.
 - Produces: a non-sensitive acceptance report and a reviewable feature branch; formal installation remains unchanged.
 
-- [ ] **Step 1: Run formatting, lint, and complete workspace tests**
+- [x] **Step 1: Run formatting, lint, and complete workspace tests**
 
 Run:
 
@@ -438,7 +438,7 @@ cargo test --workspace
 
 Expected: zero failures and zero warnings; the large performance test remains the only ignored test in the normal suite.
 
-- [ ] **Step 2: Run the 10k/5k performance contract**
+- [x] **Step 2: Run the 10k/5k performance contract**
 
 Run:
 
@@ -448,7 +448,7 @@ cargo test -p art-retrieval --test performance_contracts --release -- --ignored 
 
 Expected: startup < 500 ms, cold recall < 150 ms, recall p95 < 150 ms in-process, capture p95 < 100 ms, and eight concurrent recalls each < 500 ms.
 
-- [ ] **Step 3: Run security and release gates**
+- [x] **Step 3: Run security and release gates**
 
 Run:
 
@@ -459,11 +459,11 @@ bash tests/scripts/release-gate.sh
 
 Expected: both exit zero; no credentials, absolute developer paths, benchmark corpora, Vaults, or test-only data enter release payloads.
 
-- [ ] **Step 4: Re-run BEIR and record aggregate evidence**
+- [x] **Step 4: Re-run BEIR and record aggregate evidence**
 
 Run the Task 4 release command from a clean fixture and record only aggregate metrics, latency, dataset checksums, ART commit, and commands in `docs/artifacts/retrieval-acceptance-2026-08-30.md`. Do not copy queries, qrels, document bodies, machine-private paths, or formal knowledge content.
 
-- [ ] **Step 5: Review repository state and commit evidence**
+- [x] **Step 5: Review repository state and commit evidence**
 
 Run:
 
@@ -478,10 +478,10 @@ Expected: only intended source, tests, scripts, docs, and aggregate evidence dif
 Commit:
 
 ```bash
-git add docs/testing.md docs/artifacts/retrieval-acceptance-2026-08-30.md
+git add docs/testing.md docs/artifacts/retrieval-acceptance-2026-08-30.md tests/scripts/test_migration.sh docs/superpowers/plans/2026-08-30-art-retrieval-quality.md
 git commit -m "docs: record ART retrieval quality acceptance"
 ```
 
 - [ ] **Step 6: Stop before formal installation**
 
-Report source, benchmark, performance, packaging, and branch state. Do not replace `/Users/fanhcy/.local/bin/art`, restart Codex/DSH MCP servers, publish a release, push a branch, or change formal ART data until the operator reviews the completed candidate.
+Report source, benchmark, performance, packaging, and branch state. Do not replace the installed ART binary, restart Codex/DSH MCP servers, publish a release, push a branch, or change formal ART data until the operator reviews the completed candidate.
