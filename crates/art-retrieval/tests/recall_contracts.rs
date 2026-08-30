@@ -154,6 +154,58 @@ fn bm25_rank_dominates_common_term_overlap() {
 }
 
 #[test]
+fn configurable_result_depth_returns_ten_with_large_budget() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    let knowledge = KnowledgeVault::open(root.path().join("knowledge"), [33; 32]).unwrap();
+    for index in 0..12 {
+        publish_knowledge(
+            &knowledge,
+            &agent,
+            &format!("retrieval.depth-{index}"),
+            &format!("shared marker {index}"),
+            &format!("shared marker knowledge body {index}"),
+        );
+    }
+    let engine = RecallEngine::new(private, knowledge);
+
+    let default_bundle = engine.recall(RecallRequest::new("shared marker")).unwrap();
+    assert_eq!(default_bundle.knowledge_editions.len(), 3);
+    let expanded = engine
+        .recall(RecallRequest {
+            budget_tokens: 6_000,
+            max_private_results: Some(10),
+            max_knowledge_results: Some(10),
+            ..RecallRequest::new("shared marker")
+        })
+        .unwrap();
+
+    assert_eq!(expanded.knowledge_editions.len(), 10);
+    assert_eq!(expanded.omitted_knowledge, 2);
+}
+
+#[test]
+fn invalid_result_depth_fails_before_recall() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let engine = RecallEngine::new(
+        AgentVault::open(root.path().join("agent.sqlite3"), agent).unwrap(),
+        KnowledgeVault::open(root.path().join("knowledge"), [34; 32]).unwrap(),
+    );
+
+    for invalid in [0, 21] {
+        let error = engine
+            .recall(RecallRequest {
+                max_knowledge_results: Some(invalid),
+                ..RecallRequest::new("marker")
+            })
+            .unwrap_err();
+        assert!(matches!(error, art_domain::ArtError::InvalidInput(_)));
+    }
+}
+
+#[test]
 fn private_and_published_channels_are_separate_and_cross_agent_memory_never_leaks() {
     let root = tempdir().unwrap();
     let codex = AgentId::from_str("codex-primary").unwrap();

@@ -40,6 +40,56 @@ fn help_exposes_operator_and_mcp_surfaces() {
 }
 
 #[test]
+fn recall_result_depth_flags_are_exposed_and_validated() {
+    let help_output = art().args(["recall", "--help"]).output().unwrap();
+    assert!(help_output.status.success());
+    let help = String::from_utf8(help_output.stdout).unwrap();
+    assert!(help.contains("--max-private-results"));
+    assert!(help.contains("--max-knowledge-results"));
+
+    let root = tempdir().unwrap();
+    let home = root.path().to_str().unwrap();
+    assert!(
+        art()
+            .args(["--home", home, "init", "--confirm"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        art()
+            .args([
+                "--home",
+                home,
+                "agent",
+                "create",
+                "--id",
+                "codex-primary",
+                "--host",
+                "codex",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let invalid = art()
+        .args([
+            "--home",
+            home,
+            "recall",
+            "marker",
+            "--agent",
+            "codex-primary",
+            "--max-knowledge-results",
+            "21",
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("ART_INVALID_INPUT"));
+}
+
+#[test]
 fn backup_cli_creates_verifies_and_atomically_restores_a_new_home() {
     let root = tempdir().unwrap();
     let source_home = root.path().join("source-home");

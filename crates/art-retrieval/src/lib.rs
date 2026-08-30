@@ -62,6 +62,8 @@ pub struct RecallRequest {
     pub query: String,
     pub include_candidates: bool,
     pub budget_tokens: usize,
+    pub max_private_results: Option<usize>,
+    pub max_knowledge_results: Option<usize>,
 }
 
 impl RecallRequest {
@@ -70,6 +72,8 @@ impl RecallRequest {
             query: query.into(),
             include_candidates: false,
             budget_tokens: 1_800,
+            max_private_results: None,
+            max_knowledge_results: None,
         }
     }
 }
@@ -117,12 +121,26 @@ impl RecallEngine {
                 "query is required and token budget must be 128..6000".into(),
             ));
         }
+        if [request.max_private_results, request.max_knowledge_results]
+            .into_iter()
+            .flatten()
+            .any(|depth| !(1..=20).contains(&depth))
+        {
+            return Err(ArtError::InvalidInput("result depth must be 1..=20".into()));
+        }
         let query = LexicalQuery::new(&request.query);
         let terms = query.search_terms();
+        let private_requested = request.max_private_results.unwrap_or(3);
+        let knowledge_requested = request.max_knowledge_results.unwrap_or(3);
+        let private_candidate_limit = (private_requested * 64).clamp(512, 2_048);
+        let knowledge_candidate_limit = (knowledge_requested * 64).clamp(512, 2_048);
         let now = Utc::now();
         let mut memories = Vec::new();
         let mut cautions = Vec::new();
-        for candidate in self.private_vault.search_ranked_candidates(&terms, 512)? {
+        for candidate in self
+            .private_vault
+            .search_ranked_candidates(&terms, private_candidate_limit)?
+        {
             let memory = candidate.artifact;
             let text = memory_text(&memory);
             let lexical = LexicalDocument::new(&text);
@@ -168,7 +186,10 @@ impl RecallEngine {
             }
         }
         let mut knowledge = Vec::new();
-        for candidate in self.knowledge_vault.search_ranked_candidates(&terms, 512)? {
+        for candidate in self
+            .knowledge_vault
+            .search_ranked_candidates(&terms, knowledge_candidate_limit)?
+        {
             let edition = candidate.edition;
             let text = knowledge_text(&edition)?;
             let lexical = LexicalDocument::new(&text);
@@ -198,8 +219,9 @@ impl RecallEngine {
         }
         sort_items(&mut memories);
         sort_items(&mut knowledge);
-        let private_cap = 3_usize.min((request.budget_tokens * 35 / 100 / 120).max(1));
-        let knowledge_cap = 3_usize.min((request.budget_tokens * 55 / 100 / 160).max(1));
+        let private_cap = private_requested.min((request.budget_tokens * 35 / 100 / 120).max(1));
+        let knowledge_cap =
+            knowledge_requested.min((request.budget_tokens * 55 / 100 / 160).max(1));
         let omitted_private = memories.len().saturating_sub(private_cap);
         let omitted_knowledge = knowledge.len().saturating_sub(knowledge_cap);
         memories.truncate(private_cap);

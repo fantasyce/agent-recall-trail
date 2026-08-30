@@ -55,6 +55,47 @@ fn tool_surface_is_exactly_six_agent_safe_tools() {
     }
 }
 
+#[test]
+fn recall_result_depth_is_optional_and_bounded_in_the_tool_schema() {
+    let (_root, server) = server();
+    let tools: serde_json::Value = serde_json::from_str(&server.tool_schema_json()).unwrap();
+    let recall = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "art_recall")
+        .unwrap();
+    for field in ["max_private_results", "max_knowledge_results"] {
+        let property = &recall["inputSchema"]["properties"][field];
+        assert_eq!(property["minimum"], 1);
+        assert_eq!(property["maximum"], 20);
+        assert!(
+            !recall["inputSchema"]["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|value| value == field))
+        );
+    }
+}
+
+#[tokio::test]
+async fn recall_result_depth_is_forwarded_to_validation() {
+    let (_root, server) = server();
+    let result = server
+        .art_recall(Parameters(RecallInput {
+            query: "marker".into(),
+            include_candidates: false,
+            budget_tokens: 1_800,
+            max_private_results: None,
+            max_knowledge_results: Some(21),
+        }))
+        .await;
+
+    let Err(error) = result else {
+        panic!("invalid result depth unexpectedly succeeded");
+    };
+    assert!(error.contains("ART_INVALID_INPUT"));
+}
+
 #[tokio::test]
 async fn capture_then_recall_stays_bound_to_process_identity() {
     let (_root, server) = server();
@@ -102,6 +143,8 @@ async fn capture_then_recall_stays_bound_to_process_identity() {
             query: "EOF 关闭子进程".into(),
             include_candidates: false,
             budget_tokens: 1800,
+            max_private_results: None,
+            max_knowledge_results: None,
         }))
         .await
         .unwrap();
