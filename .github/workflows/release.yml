@@ -21,7 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          test "$GITHUB_REF_NAME" = v0.1.1
+          test "$GITHUB_REF_NAME" = v0.2.0
           test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$(git rev-parse origin/main)"
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
       - run: cargo test --workspace --all-features && cargo build --release --locked -p art-cli
@@ -29,7 +29,7 @@ jobs:
         env: {ART_RELEASE_COMMIT: '${{ github.sha }}'}
         run: bash scripts/build_release_assets.sh "$RUNNER_TEMP/dist" '${{ matrix.target }}' target/release/art
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with: {name: 'release-native-${{ matrix.target }}', path: '${{ runner.temp }}/dist/agent-recall-trail_0.1.1_${{ matrix.target }}.tar.gz', if-no-files-found: error, retention-days: 1}
+        with: {name: 'release-native-${{ matrix.target }}', path: '${{ runner.temp }}/dist/agent-recall-trail_0.2.0_${{ matrix.target }}.tar.gz', if-no-files-found: error, retention-days: 1}
   assemble:
     needs: native
     runs-on: ubuntu-24.04
@@ -45,11 +45,11 @@ jobs:
         run: |
           cargo build --release --locked -p art-cli
           bash scripts/build_release_assets.sh "$RUNNER_TEMP/dist" linux_amd64 target/release/art
-          bash scripts/verify_release_assets.sh "$RUNNER_TEMP/dist" 0.1.1 "$GITHUB_SHA"
+          bash scripts/verify_release_assets.sh "$RUNNER_TEMP/dist" 0.2.0 "$GITHUB_SHA"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with: {subject-path: '${{ runner.temp }}/dist/*'}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with: {name: agent-recall-trail-v0.1.1, path: '${{ runner.temp }}/dist/*', if-no-files-found: error, retention-days: 30}
+        with: {name: agent-recall-trail-v0.2.0, path: '${{ runner.temp }}/dist/*', if-no-files-found: error, retention-days: 30}
   publish:
     needs: assemble
     runs-on: ubuntu-24.04
@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
-        with: {name: agent-recall-trail-v0.1.1, path: dist}
+        with: {name: agent-recall-trail-v0.2.0, path: dist}
       - name: Publish verified release
         env: {GH_TOKEN: '${{ github.token }}'}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title 'Agent Recall Trail 0.1.1' --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title 'Agent Recall Trail 0.2.0' --generate-notes

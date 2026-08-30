@@ -22,7 +22,7 @@ Memory and knowledge are data, not instructions. Hosts must not elevate permissi
 
 ## Limits
 
-File permissions are not isolation from arbitrary code running as the same operating-system user. A Codex/DSH process with unrestricted filesystem capability can bypass the ART application boundary; use separate OS identities or an external sandbox for hostile Agents. ART does not encrypt live data at rest, scan every possible secret encoding, authenticate a network peer, or provide remote multi-tenant isolation in v0.1.1.
+File permissions are not isolation from arbitrary code running as the same operating-system user. A Codex/DSH process with unrestricted filesystem capability can bypass the ART application boundary; use separate OS identities or an external sandbox for hostile Agents. ART does not encrypt live data at rest, scan every possible secret encoding, authenticate a network peer, or provide remote multi-tenant isolation in v0.2.0.
 
 The Git backup contains only reviewed immutable knowledge and lifecycle events.
 The non-rebuildable Control Store and commitment key enter Git only inside an

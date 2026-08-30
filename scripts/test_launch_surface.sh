@@ -15,7 +15,7 @@ import json, pathlib, sys
 repo = pathlib.Path(sys.argv[1])
 manifest = json.loads((repo / "docs/launch/launch-manifest.json").read_text())
 assert manifest["schema_version"] == 1
-assert manifest["release"] == "v0.1.1"
+assert manifest["release"] == "v0.2.0"
 channels = {item["id"]: item for item in manifest["channels"]}
 assert {"github-release", "mcp-registry", "github-pages", "github-discussion", "design-partners"} <= channels.keys()
 for item in channels.values():
@@ -24,9 +24,9 @@ for item in channels.values():
 release = (repo / ".github/workflows/release.yml").read_text()
 registry = (repo / ".github/workflows/publish-mcp.yml").read_text()
 assert "git rev-parse origin/main" in release
-assert "ref: v0.1.1" in registry
+assert "ref: v0.2.0" in registry
 assert "login github-oidc" in registry
-assert "io.github.fantasyce%2Fagent-recall-trail/versions/0.1.1" in registry
+assert "io.github.fantasyce%2Fagent-recall-trail/versions/0.2.0" in registry
 for workflow in (release, registry):
     assert "actions/checkout@v" not in workflow
 PY

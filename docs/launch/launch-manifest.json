@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "release": "v0.1.1",
-  "release_commit": "1337d4a9d1dcfcc5c512664548572ee9e58808d0",
-  "published_at": "2026-08-30T10:40:29Z",
+  "release": "v0.2.0",
+  "release_commit": "",
+  "published_at": "",
   "channels": [
-    {"id":"github-release","status":"published","public_url":"https://github.com/fantasyce/agent-recall-trail/releases/tag/v0.1.1"},
-    {"id":"mcp-registry","status":"published","public_url":"https://registry.modelcontextprotocol.io/v0.1/servers/io.github.fantasyce%2Fagent-recall-trail/versions/0.1.1"},
+    {"id":"github-release","status":"prepared","public_url":""},
+    {"id":"mcp-registry","status":"prepared","public_url":""},
     {"id":"github-pages","status":"published","public_url":"https://fantasyce.github.io/agent-recall-trail/"},
     {"id":"github-discussion","status":"published","public_url":"https://github.com/fantasyce/agent-recall-trail/discussions/7"},
     {"id":"design-partners","status":"published","public_url":"https://github.com/fantasyce/agent-recall-trail/issues/3"},

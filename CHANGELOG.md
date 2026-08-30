@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 - 2026-08-31
+
+- Added BM25-ranked broad candidate retrieval for private memories and shared Knowledge Editions.
+- Added BM25-first fusion with bounded exact, Jieba-token, and CJK-bigram signals.
+- Added optional private and knowledge result depths from 1 through 20 across the library, CLI, and MCP schema.
+- Added reproducible full-split BEIR SciFact and NFCorpus product-path quality gates.
+- Preserved lexical-only operation, per-Agent isolation, six MCP tools, backup compatibility, and explicit `vector_status=unavailable`.
+
 ## 0.1.1 - 2026-08-30
 
 - Added deterministic, strictly allowlisted Knowledge Vault snapshots.

@@ -1,6 +1,6 @@
 {
   "name": "agent-recall-trail",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Private Agent memory and human-reviewed shared knowledge for Codex",
   "author": {
     "name": "Agent Recall Trail contributors",
