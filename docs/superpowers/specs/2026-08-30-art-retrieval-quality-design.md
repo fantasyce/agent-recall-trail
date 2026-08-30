@@ -1,6 +1,6 @@
 # ART Retrieval Quality Design
 
-**Status:** Proposed for operator review
+**Status:** Approved by the operator on 2026-08-30
 
 **Target release:** ART 0.2.0
 
