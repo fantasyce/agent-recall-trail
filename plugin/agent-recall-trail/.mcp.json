@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agent-recall-trail": {
+      "command": "art",
+      "args": ["mcp", "serve", "--agent", "codex-primary"]
+    }
+  }
+}

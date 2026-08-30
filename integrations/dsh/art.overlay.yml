@@ -1,0 +1,24 @@
+# ART opt-in overlay for DSH 0.1.1-rc.2.
+# Required environment: ART_BINARY, ART_HOME, ART_AGENT.
+- insert:
+    - id: art-memory
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: art
+        transport: stdio
+        command: !!js process.env.ART_BINARY
+        args:
+          - --home
+          - !!js process.env.ART_HOME
+          - mcp
+          - serve
+          - --agent
+          - !!js process.env.ART_AGENT
+        env: {}
+        failOnStartupError: true
+        toolCallTimeoutMs: 30000
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 10

@@ -1,0 +1,29 @@
+{
+  "name": "agent-recall-trail",
+  "version": "0.1.0",
+  "description": "Private Agent memory and human-reviewed shared knowledge for Codex",
+  "author": {
+    "name": "Agent Recall Trail contributors",
+    "url": "https://github.com/fantasyce"
+  },
+  "homepage": "https://fantasyce.github.io/agent-recall-trail/",
+  "repository": "https://github.com/fantasyce/agent-recall-trail",
+  "license": "Apache-2.0",
+  "keywords": ["agent-memory", "knowledge-base", "mcp", "codex"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Recall Trail",
+    "shortDescription": "Private Agent memory plus reviewed shared knowledge.",
+    "longDescription": "Recall one Codex Agent's private experience and human-reviewed Knowledge Editions through a local stdio MCP server. Private memory stays in a physically separate Agent Vault and is never shared automatically.",
+    "developerName": "Agent Recall Trail contributors",
+    "category": "Developer Tools",
+    "capabilities": ["Local", "Read", "Write"],
+    "websiteURL": "https://fantasyce.github.io/agent-recall-trail/",
+    "defaultPrompt": [
+      "Recall relevant private experience and reviewed knowledge for this task.",
+      "Save this bounded, sourced conclusion to my private Recall Trail."
+    ],
+    "brandColor": "#2F6B5F"
+  },
+  "mcpServers": "./.mcp.json"
+}

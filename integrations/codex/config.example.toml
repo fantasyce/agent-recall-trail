@@ -1,0 +1,5 @@
+[mcp_servers.art_codex_primary]
+command = "/absolute/path/to/art"
+args = ["--home", "/task-or-user-art-home", "mcp", "serve", "--agent", "codex-primary"]
+startup_timeout_sec = 10
+tool_timeout_sec = 30

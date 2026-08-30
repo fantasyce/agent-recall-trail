@@ -1,0 +1,25 @@
+{
+  "schema": "art.schema-inventory.v1",
+  "schemas": [
+    {
+      "path": "contracts/across-context/context-pack.schema.json",
+      "sha256": "db4bcdc4b25a9cf7baccd5f2ab6853e20ce7124079d5385fb2d68ca04a4c48cf"
+    },
+    {
+      "path": "contracts/across-context/grant.schema.json",
+      "sha256": "da0d14afcacc6d1af98b51a54f288fce79389e691825c973945981c895dd445c"
+    },
+    {
+      "path": "contracts/across-context/invalidation.schema.json",
+      "sha256": "f35cf5699b2d8322328848ea04752a06ba9ca21ef8fe7a4678ca31b198ff6a0f"
+    },
+    {
+      "path": "contracts/across-context/recall-bundle.schema.json",
+      "sha256": "89c07c39787431794f04ccb9fc7534018c393152dd5448e6c0315a86d2e66804"
+    },
+    {
+      "path": "docs/artifacts/mcp-tools.schema.json",
+      "sha256": "56bb84d346b3a5cdbdd4a5f2f89b401bb3585f7f94b4e8dc5d8bc745cbc29d88"
+    }
+  ]
+}

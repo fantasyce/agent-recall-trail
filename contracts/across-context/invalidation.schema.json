@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"art.invalidation.v1","type":"object","required":["subject_ref","new_epoch","reason","occurred_at"],"properties":{"subject_ref":{"type":"string"},"new_epoch":{"type":"integer","minimum":1},"reason":{"type":"string"},"occurred_at":{"type":"string","format":"date-time"}},"additionalProperties":false}

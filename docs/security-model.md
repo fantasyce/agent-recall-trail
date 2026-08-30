@@ -1,0 +1,29 @@
+# Security model
+
+## Protected assets
+
+ART protects private Agent experience, source locations and excerpts, knowledge review records, commitment material, and the boundary between Agent and human authority.
+
+## Controls
+
+- Physical per-Agent SQLite files and startup identity binding prevent cross-Agent access through ART interfaces.
+- Private files use owner-only permissions; directories use owner-only traversal.
+- MCP exposes no SQL, owner selector, approval, publication, deletion, grant, or cross-Agent tool.
+- Structured anchors reject common credential forms, private keys, authorization headers, raw transcripts, unsafe receipt shapes, oversized source versions/digests, and forged export hashes.
+- Publication shares keyed commitments and hashes instead of private source identifiers.
+- Paths are canonicalized and constrained; import/export rejects symbolic links, hard links, unsafe content, and existing targets.
+- Tool output is object-shaped and has stable schemas for strict MCP clients.
+- Debug logging is clamped to ART targets; stdio remains JSON-RPC only and request bodies are not echoed to stderr.
+- SQLite busy, read-only, simulated disk-full, migration-race, WAL, corrupted projection, and partial-publication behavior is fail-closed and tested.
+
+## Prompt injection
+
+Memory and knowledge are data, not instructions. Hosts must not elevate permissions because stored text requests it. Knowledge review must treat embedded tool directions, policy overrides, and credential requests as suspicious. ART does not bypass the host's normal approval and sandbox policy.
+
+## Limits
+
+File permissions are not isolation from arbitrary code running as the same operating-system user. A Codex/DSH process with unrestricted filesystem capability can bypass the ART application boundary; use separate OS identities or an external sandbox for hostile Agents. ART does not encrypt data at rest, scan every possible secret encoding, authenticate a network peer, or provide remote multi-tenant isolation in v0.1.0.
+
+## Reporting
+
+Follow `SECURITY.md`. Never include live credentials or private memory bodies in a report.

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agent Recall Trail"
+  short_description: "Recall private experience and reviewed shared knowledge."
+  default_prompt: "Use $agent-recall-trail to recall relevant experience and reviewed knowledge for this task."
+  brand_color: "#2F6B5F"
+policy:
+  allow_implicit_invocation: true
