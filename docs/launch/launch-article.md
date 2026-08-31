@@ -1,6 +1,6 @@
 # ART v0.3.0: progressive recall with user-selected retrieval
 
-Status: prepared launch copy; publish only after the v0.3.0 release and acceptance gates are public.
+Status: published with the public v0.3.0 release on 2026-08-31.
 
 Coding Agents need continuity, but private experience and shared knowledge do not have the same authority. ART gives each Agent a physically separate private Recall Trail, then allows stable material to cross the boundary only as a human-reviewed, immutable Knowledge Edition.
 

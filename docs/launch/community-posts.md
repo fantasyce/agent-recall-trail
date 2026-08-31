@@ -1,6 +1,6 @@
 # Community launch copy
 
-Status: prepared launch copy; publish only after the v0.3.0 release and acceptance gates are public.
+Status: approved launch copy. GitHub Release, MCP Registry, and project site were published on 2026-08-31; account-authenticated community channels remain recorded in the launch manifest.
 
 ## Short post
 

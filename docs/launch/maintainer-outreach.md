@@ -1,6 +1,6 @@
 # Maintainer outreach
 
-Status: prepared launch copy; send only after the v0.3.0 release and acceptance gates are public.
+Status: approved copy; not sent because no owner-approved recipient list or authenticated messaging channel was available.
 
 Subject: ART v0.3.0 — progressive recall for review-gated Agent knowledge
 
