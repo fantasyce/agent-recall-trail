@@ -1,8 +1,10 @@
 //! Admission-gated Chinese lexical retrieval and Recall Bundles.
 
+mod navigation;
 mod policy;
 mod ranking;
 
+pub use navigation::NavigationTopic;
 pub use policy::{RecallDetail, RetrievalMode};
 
 use std::{cmp::Ordering, collections::BTreeSet, fs, sync::OnceLock};
@@ -10,7 +12,7 @@ use std::{cmp::Ordering, collections::BTreeSet, fs, sync::OnceLock};
 use art_agent_store::{AgentVault, RankedMemoryCandidate};
 use art_domain::{
     ArtError, ArtResult,
-    memory::{MemoryArtifact, MemoryStatus},
+    memory::{MemoryArtifact, MemoryScope, MemoryStatus},
 };
 use art_knowledge::{EditionRecord, KnowledgeVault, RankedEditionCandidate};
 use chrono::{DateTime, Duration, Utc};
@@ -20,6 +22,7 @@ use sha2::{Digest, Sha256};
 use ulid::Ulid;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::navigation::{NavigationCandidate, build_topics};
 use crate::ranking::rank_score;
 
 static JIEBA: OnceLock<Jieba> = OnceLock::new();
@@ -50,6 +53,7 @@ pub struct RecallBundle {
     pub query_hash: String,
     pub private_memories: Vec<RecallItem>,
     pub knowledge_editions: Vec<RecallItem>,
+    pub navigation_topics: Vec<NavigationTopic>,
     pub cautions: Vec<String>,
     pub omitted_private: usize,
     pub omitted_knowledge: usize,
@@ -144,6 +148,9 @@ impl RecallEngine {
             return Err(ArtError::InvalidInput("result depth must be 1..=20".into()));
         }
         let query = LexicalQuery::new(&request.query);
+        if request.detail == RecallDetail::Route {
+            return self.route(&request);
+        }
         let terms = query.search_terms();
         let private_requested = request.max_private_results.unwrap_or(3);
         let knowledge_requested = request.max_knowledge_results.unwrap_or(3);
@@ -288,6 +295,7 @@ impl RecallEngine {
             query_hash: hex::encode(Sha256::digest(request.query.as_bytes())),
             private_memories: memories,
             knowledge_editions: knowledge,
+            navigation_topics: Vec::new(),
             cautions,
             omitted_private,
             omitted_knowledge,
@@ -307,6 +315,138 @@ impl RecallEngine {
             }],
             fallback_reason: None,
         })
+    }
+
+    fn route(&self, request: &RecallRequest) -> ArtResult<RecallBundle> {
+        let mut map_status = "ready".to_owned();
+        let private_entries = match self.private_vault.navigation_aligned() {
+            Ok(true) => self.private_vault.navigation_entries(),
+            Ok(false) | Err(_) => self
+                .private_vault
+                .rebuild_navigation()
+                .and_then(|_| self.private_vault.navigation_entries()),
+        };
+        let knowledge_entries = match self.knowledge_vault.navigation_aligned() {
+            Ok(true) => self.knowledge_vault.navigation_entries(),
+            Ok(false) | Err(_) => self
+                .knowledge_vault
+                .rebuild_navigation()
+                .and_then(|_| self.knowledge_vault.navigation_entries()),
+        };
+        let mut candidates = Vec::new();
+        match private_entries {
+            Ok(entries) => {
+                candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
+                    lane: "private_memory".into(),
+                    topic_key: format!("{}:{}", entry.scope_type, entry.scope_key),
+                    searchable_metadata: format!(
+                        "{} {} {} {}",
+                        entry.title, entry.kind, entry.scope_type, entry.scope_key
+                    ),
+                    subject_ref: format!("memory:{}@{}", entry.memory_id, entry.revision),
+                    title: entry.title,
+                    usage_count: entry.usage_count,
+                }))
+            }
+            Err(_) => {
+                map_status = "degraded".into();
+                candidates.extend(self.canonical_private_navigation_candidates()?);
+            }
+        }
+        match knowledge_entries {
+            Ok(entries) => {
+                candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
+                    lane: "shared_knowledge".into(),
+                    topic_key: entry.knowledge_key.clone(),
+                    searchable_metadata: format!(
+                        "{} {} {}",
+                        entry.title, entry.knowledge_key, entry.applicability
+                    ),
+                    subject_ref: format!("knowledge:{}", entry.edition_id),
+                    title: entry.title,
+                    usage_count: entry.usage_count,
+                }))
+            }
+            Err(_) => {
+                map_status = "degraded".into();
+                candidates.extend(self.canonical_knowledge_navigation_candidates()?);
+            }
+        }
+        let generated_at = Utc::now();
+        Ok(RecallBundle {
+            schema: "art.recall.v1".into(),
+            bundle_id: format!("artb_{}", Ulid::new()),
+            agent_id: self.private_vault.agent_id().to_string(),
+            query_hash: hex::encode(Sha256::digest(request.query.as_bytes())),
+            private_memories: Vec::new(),
+            knowledge_editions: Vec::new(),
+            navigation_topics: build_topics(&request.query, candidates),
+            cautions: Vec::new(),
+            omitted_private: 0,
+            omitted_knowledge: 0,
+            budget_tokens: request.budget_tokens,
+            generated_at,
+            expires_at: generated_at + Duration::minutes(10),
+            persist_policy: "no_automatic_capture".into(),
+            vector_status: "unavailable".into(),
+            requested_mode: request.mode,
+            effective_mode: request.mode,
+            detail: RecallDetail::Route,
+            map_status,
+            candidate_sources: vec!["private_navigation".into(), "shared_navigation".into()],
+            fallback_reason: None,
+        })
+    }
+
+    fn canonical_private_navigation_candidates(&self) -> ArtResult<Vec<NavigationCandidate>> {
+        let now = Utc::now();
+        Ok(self
+            .private_vault
+            .list()?
+            .into_iter()
+            .filter(|memory| eligible_memory(memory, false, now))
+            .map(|memory| {
+                let (scope_type, scope_key) = navigation_scope(&memory.scope);
+                NavigationCandidate {
+                    lane: "private_memory".into(),
+                    topic_key: format!("{scope_type}:{scope_key}"),
+                    searchable_metadata: format!(
+                        "{} {} {scope_type} {scope_key}",
+                        memory.title,
+                        memory.payload.kind_name()
+                    ),
+                    subject_ref: format!("memory:{}@{}", memory.id, memory.current_revision),
+                    title: memory.title,
+                    usage_count: 0,
+                }
+            })
+            .collect())
+    }
+
+    fn canonical_knowledge_navigation_candidates(&self) -> ArtResult<Vec<NavigationCandidate>> {
+        Ok(self
+            .knowledge_vault
+            .list_current()?
+            .into_iter()
+            .map(|edition| NavigationCandidate {
+                lane: "shared_knowledge".into(),
+                topic_key: edition.knowledge_key.clone(),
+                searchable_metadata: format!("{} {}", edition.title, edition.knowledge_key),
+                subject_ref: format!("knowledge:{}", edition.edition_id),
+                title: edition.title,
+                usage_count: 0,
+            })
+            .collect())
+    }
+}
+
+fn navigation_scope(scope: &MemoryScope) -> (&'static str, &str) {
+    match scope {
+        MemoryScope::Session(key) => ("session", key),
+        MemoryScope::Repository(key) => ("repository", key),
+        MemoryScope::Workspace(key) => ("workspace", key),
+        MemoryScope::Machine(key) => ("machine", key),
+        MemoryScope::User(key) => ("user", key),
     }
 }
 

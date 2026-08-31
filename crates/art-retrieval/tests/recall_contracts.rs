@@ -85,6 +85,84 @@ fn full_scan_reads_both_canonical_stores_when_lexical_projections_are_empty() {
     assert!(full_scan.fallback_reason.is_none());
 }
 
+#[test]
+fn route_returns_bounded_navigation_metadata_without_memory_or_knowledge_bodies() {
+    let root = tempdir().unwrap();
+    let codex = AgentId::from_str("codex-primary").unwrap();
+    let dsh = AgentId::from_str("dsh-primary").unwrap();
+    let codex_vault = AgentVault::open(root.path().join("codex.sqlite3"), codex.clone()).unwrap();
+    let dsh_vault = AgentVault::open(root.path().join("dsh.sqlite3"), dsh.clone()).unwrap();
+    seed_memory(
+        &codex_vault,
+        &codex,
+        "Release recovery route",
+        "PRIVATE_BODY_MUST_NOT_APPEAR",
+        "route-codex",
+    );
+    seed_memory(
+        &dsh_vault,
+        &dsh,
+        "Release recovery DSH",
+        "CROSS_AGENT_BODY_MUST_NOT_APPEAR",
+        "route-dsh",
+    );
+    let knowledge = KnowledgeVault::open(root.path().join("knowledge"), [43; 32]).unwrap();
+    publish_knowledge(
+        &knowledge,
+        &codex,
+        "release.shared-route",
+        "Shared release route",
+        "KNOWLEDGE_BODY_MUST_NOT_APPEAR",
+    );
+    let engine = RecallEngine::new(codex_vault.clone(), knowledge);
+
+    let bundle = engine
+        .recall(RecallRequest {
+            detail: RecallDetail::Route,
+            ..RecallRequest::new("release route")
+        })
+        .unwrap();
+
+    assert!(bundle.private_memories.is_empty());
+    assert!(bundle.knowledge_editions.is_empty());
+    assert!(!bundle.navigation_topics.is_empty());
+    assert!(bundle.navigation_topics.len() <= 12);
+    assert!(
+        bundle
+            .navigation_topics
+            .iter()
+            .all(|topic| topic.subject_refs.len() <= 8)
+    );
+    assert_eq!(bundle.map_status, "ready");
+    let encoded = serde_json::to_string(&bundle).unwrap();
+    for forbidden in [
+        "PRIVATE_BODY_MUST_NOT_APPEAR",
+        "CROSS_AGENT_BODY_MUST_NOT_APPEAR",
+        "KNOWLEDGE_BODY_MUST_NOT_APPEAR",
+        "dsh-primary",
+    ] {
+        assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+    }
+
+    rusqlite::Connection::open(codex_vault.path())
+        .unwrap()
+        .execute("DROP TABLE memory_navigation", [])
+        .unwrap();
+    let degraded = engine
+        .recall(RecallRequest {
+            detail: RecallDetail::Route,
+            ..RecallRequest::new("release recovery")
+        })
+        .unwrap();
+    assert_eq!(degraded.map_status, "degraded");
+    assert!(
+        degraded
+            .navigation_topics
+            .iter()
+            .any(|topic| topic.lane == "private_memory")
+    );
+}
+
 fn seed_memory(vault: &AgentVault, agent: &AgentId, title: &str, text: &str, key: &str) -> String {
     let mut memory = MemoryArtifact::new(
         agent.clone(),
