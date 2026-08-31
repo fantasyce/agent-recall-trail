@@ -71,6 +71,8 @@ pub struct KnowledgeDiagnostics {
     pub current_edition_count: u64,
     pub search_index_count: u64,
     pub search_index_aligned: bool,
+    pub navigation_count: u64,
+    pub navigation_aligned: bool,
     pub manifest_files_verified: u64,
     pub event_files_verified: u64,
     pub projection_hashes_ok: bool,
@@ -1158,6 +1160,8 @@ impl KnowledgeVault {
             search_index_count: count("SELECT COUNT(*) FROM knowledge_fts")?,
             search_index_aligned: count("SELECT COUNT(*) FROM knowledge_fts")?
                 == count("SELECT COUNT(*) FROM edition_projections")?,
+            navigation_count: count("SELECT COUNT(*) FROM knowledge_navigation")?,
+            navigation_aligned: self.navigation_aligned()?,
             manifest_files_verified,
             event_files_verified,
             projection_hashes_ok,

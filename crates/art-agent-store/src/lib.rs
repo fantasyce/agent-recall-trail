@@ -32,6 +32,8 @@ pub struct AgentVaultDiagnostics {
     pub memory_count: u64,
     pub search_index_count: u64,
     pub search_index_aligned: bool,
+    pub navigation_count: u64,
+    pub navigation_aligned: bool,
     pub revision_count: u64,
     pub anchor_count: u64,
     pub wal_bytes: u64,
@@ -978,6 +980,8 @@ impl AgentVault {
             memory_count,
             search_index_count,
             search_index_aligned: memory_count == search_index_count,
+            navigation_count: count("memory_navigation")?,
+            navigation_aligned: self.navigation_aligned()?,
             revision_count: count("memory_revisions")?,
             anchor_count: count("source_anchors")?,
             wal_bytes: fs::metadata(self.path.with_extension("sqlite3-wal"))

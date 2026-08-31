@@ -92,6 +92,71 @@ fn recall_result_depth_flags_are_exposed_and_validated() {
 }
 
 #[test]
+fn reindex_navigation_rebuilds_both_lane_local_maps_and_doctor_reports_alignment() {
+    let root = tempdir().unwrap();
+    let home = root.path().to_str().unwrap();
+    assert!(
+        art()
+            .args(["--home", home, "init", "--confirm"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        art()
+            .args([
+                "--home",
+                home,
+                "agent",
+                "create",
+                "--id",
+                "codex-primary",
+                "--host",
+                "codex",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let output = art()
+        .args([
+            "--home",
+            home,
+            "reindex",
+            "--agent",
+            "codex-primary",
+            "--knowledge",
+            "--navigation",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["private_navigation"], 0);
+    assert_eq!(value["knowledge_navigation"], 0);
+
+    let doctor = art()
+        .args([
+            "--home",
+            home,
+            "doctor",
+            "--agent",
+            "codex-primary",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let doctor: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert_eq!(doctor["agent_vault"]["navigation_aligned"], true);
+    assert_eq!(doctor["knowledge"]["navigation_aligned"], true);
+}
+
+#[test]
 fn backup_cli_creates_verifies_and_atomically_restores_a_new_home() {
     let root = tempdir().unwrap();
     let source_home = root.path().join("source-home");

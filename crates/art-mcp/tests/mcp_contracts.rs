@@ -424,6 +424,9 @@ async fn every_agent_safe_tool_has_a_success_path_and_stale_reads_fail_closed() 
         .unwrap();
     let health = server.art_health(Parameters(HealthInput {})).await.unwrap();
     assert_eq!(health.0.fields["bound_agent_id"], "codex-primary");
+    assert_eq!(health.0.fields["map_status"], "ready");
+    assert_eq!(health.0.fields["private_navigation_aligned"], true);
+    assert_eq!(health.0.fields["knowledge_navigation_aligned"], true);
 }
 
 #[tokio::test]

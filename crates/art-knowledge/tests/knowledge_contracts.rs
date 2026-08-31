@@ -179,6 +179,9 @@ fn navigation_catalog_contains_only_current_editions_and_exact_applicability() {
     assert!(entries[0].current);
     assert_eq!(entries[0].source_epoch, vault.index_epoch().unwrap());
     assert!(vault.navigation_aligned().unwrap());
+    let diagnostics = vault.diagnostics().unwrap();
+    assert!(diagnostics.navigation_aligned);
+    assert_eq!(diagnostics.navigation_count, 1);
     publish_search_fixture(
         &vault,
         &agent,

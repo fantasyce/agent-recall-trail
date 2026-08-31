@@ -138,6 +138,8 @@ enum Command {
         agent: Option<String>,
         #[arg(long)]
         knowledge: bool,
+        #[arg(long)]
+        navigation: bool,
     },
 }
 
@@ -530,29 +532,43 @@ async fn run(cli: Cli) -> ArtResult<()> {
         Command::Import { command } => import_command(&paths, command),
         Command::Export { command } => export_command(&paths, command),
         Command::Backup { command } => backup_command(&paths, command),
-        Command::Reindex { agent, knowledge } => {
+        Command::Reindex {
+            agent,
+            knowledge,
+            navigation,
+        } => {
             let mut private_memories = None;
+            let mut private_navigation = None;
             if let Some(agent) = agent {
                 let (vault, _) = runtime(&paths, &agent)?;
                 if !vault.integrity_check()? {
                     return Err(ArtError::IndexDegraded);
                 }
                 private_memories = Some(vault.rebuild_search_index()?);
+                if navigation {
+                    private_navigation = Some(vault.rebuild_navigation()?);
+                }
                 vault.checkpoint_wal()?;
             }
-            let knowledge_editions = if knowledge {
-                Some({
+            let (knowledge_editions, knowledge_navigation) = if knowledge {
+                let (editions, navigation_count) = {
                     let vault = KnowledgeVault::open(paths.knowledge_vault(), load_key(&paths)?)?;
                     let rebuilt = vault.rebuild_projection()?;
                     vault.rebuild_search_index()?;
+                    let navigation_count = if navigation {
+                        Some(vault.rebuild_navigation()?)
+                    } else {
+                        None
+                    };
                     vault.checkpoint_wal()?;
-                    rebuilt
-                })
+                    (rebuilt, navigation_count)
+                };
+                (Some(editions), navigation_count)
             } else {
-                None
+                (None, None)
             };
             print_json(
-                &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"knowledge":knowledge,"knowledge_editions":knowledge_editions}),
+                &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"private_navigation":private_navigation,"knowledge":knowledge,"knowledge_editions":knowledge_editions,"knowledge_navigation":knowledge_navigation}),
             )
         }
     }

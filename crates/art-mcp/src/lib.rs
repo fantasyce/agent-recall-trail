@@ -435,8 +435,37 @@ impl ArtMcpServer {
             .knowledge_vault
             .pending_recoveries()
             .map_err(tool_error)?;
+        let private_navigation_aligned = self
+            .private_vault
+            .navigation_aligned()
+            .and_then(|aligned| {
+                if aligned {
+                    Ok(true)
+                } else {
+                    self.private_vault.rebuild_navigation()?;
+                    self.private_vault.navigation_aligned()
+                }
+            })
+            .unwrap_or(false);
+        let knowledge_navigation_aligned = self
+            .knowledge_vault
+            .navigation_aligned()
+            .and_then(|aligned| {
+                if aligned {
+                    Ok(true)
+                } else {
+                    self.knowledge_vault.rebuild_navigation()?;
+                    self.knowledge_vault.navigation_aligned()
+                }
+            })
+            .unwrap_or(false);
+        let map_status = if private_navigation_aligned && knowledge_navigation_aligned {
+            "ready"
+        } else {
+            "degraded"
+        };
         Ok(Json(ToolOutput::from_value(
-            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"vector_status":"unavailable"}),
+            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":"unavailable"}),
         )?))
     }
 }

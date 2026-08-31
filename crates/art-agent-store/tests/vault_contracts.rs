@@ -387,6 +387,7 @@ fn diagnostics_report_binding_integrity_wal_and_private_mode() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();
     let vault = AgentVault::open(root.path().join("art.sqlite3"), agent).unwrap();
+    vault.rebuild_navigation().unwrap();
     let diagnostics = vault.diagnostics().unwrap();
     assert!(diagnostics.integrity_ok);
     assert_eq!(diagnostics.foreign_key_violations, 0);
@@ -395,6 +396,8 @@ fn diagnostics_report_binding_integrity_wal_and_private_mode() {
     assert_eq!(diagnostics.journal_mode, "wal");
     assert_eq!(diagnostics.migration_checksum.len(), 64);
     assert!(diagnostics.search_index_aligned);
+    assert!(diagnostics.navigation_aligned);
+    assert_eq!(diagnostics.navigation_count, 0);
     #[cfg(unix)]
     assert_eq!(diagnostics.file_mode, Some(0o600));
 }
