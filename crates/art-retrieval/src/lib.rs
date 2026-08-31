@@ -15,7 +15,8 @@ pub use navigation::NavigationTopic;
 pub use policy::{RecallDetail, RetrievalMode};
 pub use ranking::RankFusionPolicy;
 pub use semantic::{
-    SemanticRanks, SemanticRuntime, knowledge_semantic_documents, private_semantic_documents,
+    SemanticRanks, SemanticRuntime, knowledge_semantic_documents, knowledge_semantic_snapshot,
+    private_semantic_documents, private_semantic_snapshot,
 };
 pub use semantic_projection::{
     SemanticDocument, SemanticProjection, SemanticRank, SemanticRebuildProgress,
@@ -173,6 +174,7 @@ impl RecallEngine {
         status: impl Into<String>,
         reason: impl Into<String>,
     ) -> Self {
+        self.semantic = None;
         self.semantic_unavailable_status = status.into();
         self.semantic_unavailable_reason = reason.into();
         self
@@ -329,6 +331,16 @@ impl RecallEngine {
         let mut memories = Vec::new();
         let mut cautions = Vec::new();
         let full_scan = effective_mode == RetrievalMode::FullScan;
+        if !full_scan && effective_mode != RetrievalMode::Semantic {
+            for memory_id in self
+                .private_vault
+                .search_ranked_disputed_ids(&terms, private_candidate_limit)?
+            {
+                cautions.push(format!(
+                    "disputed private memory exists for subject {memory_id}"
+                ));
+            }
+        }
         let mut private_candidates = if full_scan {
             self.private_vault
                 .list()?
@@ -549,6 +561,26 @@ impl RecallEngine {
         let omitted_knowledge = knowledge.len().saturating_sub(knowledge_cap);
         memories.truncate(private_cap);
         knowledge.truncate(knowledge_cap);
+        if matches!(
+            effective_mode,
+            RetrievalMode::Semantic | RetrievalMode::Hybrid
+        ) {
+            let runtime = self.semantic.as_ref().expect("semantic runtime checked");
+            let stale = match self.semantic_epochs_match(runtime) {
+                Ok(true) => None,
+                Ok(false) => Some(("stale", "semantic_projection_stale")),
+                Err(_) => Some(("degraded", "semantic_epoch_unavailable")),
+            };
+            if let Some((status, reason)) = stale {
+                let mut lexical_request = request.clone();
+                lexical_request.mode = RetrievalMode::Lexical;
+                let mut fallback = self.recall(lexical_request)?;
+                fallback.requested_mode = requested_mode;
+                fallback.vector_status = status.into();
+                fallback.fallback_reason = Some(reason.into());
+                return Ok(fallback);
+            }
+        }
         let generated_at = Utc::now();
         Ok(RecallBundle {
             schema: "art.recall.v1".into(),

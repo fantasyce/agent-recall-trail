@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, fs, path::Path, sync::Arc};
 
 use art_agent_store::AgentVault;
-use art_domain::{ArtResult, memory::MemoryStatus};
+use art_domain::{ArtError, ArtResult, memory::MemoryStatus};
 use art_knowledge::KnowledgeVault;
 
 use crate::{
@@ -109,4 +109,58 @@ pub fn knowledge_semantic_documents(vault: &KnowledgeVault) -> ArtResult<Vec<Sem
             )
         })
         .collect()
+}
+
+fn stable_semantic_snapshot<E, D>(
+    mut current_epoch: E,
+    collect_documents: D,
+) -> ArtResult<(String, Vec<SemanticDocument>)>
+where
+    E: FnMut() -> ArtResult<String>,
+    D: FnOnce() -> ArtResult<Vec<SemanticDocument>>,
+{
+    let epoch_before = current_epoch()?;
+    let documents = collect_documents()?;
+    let epoch_after = current_epoch()?;
+    if epoch_before != epoch_after {
+        return Err(ArtError::IndexDegraded);
+    }
+    Ok((epoch_before, documents))
+}
+
+pub fn private_semantic_snapshot(vault: &AgentVault) -> ArtResult<(String, Vec<SemanticDocument>)> {
+    stable_semantic_snapshot(|| vault.index_epoch(), || private_semantic_documents(vault))
+}
+
+pub fn knowledge_semantic_snapshot(
+    vault: &KnowledgeVault,
+) -> ArtResult<(String, Vec<SemanticDocument>)> {
+    stable_semantic_snapshot(
+        || vault.index_epoch(),
+        || knowledge_semantic_documents(vault),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use art_domain::ArtError;
+
+    use super::stable_semantic_snapshot;
+
+    #[test]
+    fn semantic_snapshot_rejects_a_canonical_epoch_change_during_collection() {
+        let calls = Cell::new(0);
+        let result = stable_semantic_snapshot(
+            || {
+                let call = calls.get();
+                calls.set(call + 1);
+                Ok(if call == 0 { "before" } else { "after" }.to_owned())
+            },
+            || Ok(Vec::new()),
+        );
+
+        assert!(matches!(result, Err(ArtError::IndexDegraded)));
+    }
 }

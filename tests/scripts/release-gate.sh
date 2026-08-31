@@ -7,6 +7,7 @@ cd "$repo_root"
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+python3 tests/scripts/test_beir_harness.py
 bash tests/scripts/test_migration.sh
 cargo test --release -p art-retrieval --test performance_contracts -- --ignored
 cargo build --release --locked

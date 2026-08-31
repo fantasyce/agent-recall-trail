@@ -15,7 +15,7 @@ use art_domain::{
         MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, SemanticPayload, Sensitivity,
     },
 };
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -142,6 +142,33 @@ fn ranked_search_keeps_bm25_order_and_broad_terms() {
 }
 
 #[test]
+fn ranked_eligible_search_applies_validity_before_the_candidate_limit() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(root.path().join("art.sqlite3"), agent.clone()).unwrap();
+    let now = Utc::now();
+
+    let eligible = ranked_memory(&agent, "shared marker", "shared marker");
+    vault
+        .capture(&eligible, &[anchor(&agent)], "validity-eligible")
+        .unwrap();
+
+    let mut future = ranked_memory(&agent, "shared marker", "shared marker");
+    future.valid_from = Some(now + Duration::days(1));
+    future.updated_at = now + Duration::seconds(1);
+    vault
+        .capture(&future, &[anchor(&agent)], "validity-future")
+        .unwrap();
+
+    let ranked = vault
+        .search_ranked_eligible_candidates(&["shared marker".into()], 1, false, now)
+        .unwrap();
+
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].artifact.id, eligible.id);
+}
+
+#[test]
 fn navigation_projection_is_deterministic_agent_bound_and_epoch_stamped() {
     let root = tempdir().unwrap();
     let codex = AgentId::from_str("codex-primary").unwrap();
@@ -219,6 +246,49 @@ fn concurrent_first_open_runs_one_identity_bound_migration() {
     let vault =
         AgentVault::open(path.as_ref(), AgentId::from_str("codex-primary").unwrap()).unwrap();
     assert_eq!(vault.diagnostics().unwrap().bound_agent_id, "codex-primary");
+}
+
+#[test]
+fn version_one_upgrade_backfills_validity_before_serving_searches() {
+    let root = tempdir().unwrap();
+    let path = root.path().join("art.sqlite3");
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let now = Utc::now();
+    let eligible = ranked_memory(&agent, "upgrade marker", "upgrade marker");
+    let mut future = ranked_memory(&agent, "upgrade marker", "upgrade marker");
+    future.valid_from = Some(now + Duration::days(1));
+    future.updated_at = now + Duration::seconds(1);
+
+    {
+        let vault = AgentVault::open(&path, agent.clone()).unwrap();
+        vault
+            .capture(&eligible, &[anchor(&agent)], "upgrade-eligible")
+            .unwrap();
+        vault
+            .capture(&future, &[anchor(&agent)], "upgrade-future")
+            .unwrap();
+    }
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute("UPDATE art_meta SET schema_version=1", [])
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE memory_artifacts SET valid_from=NULL,valid_until=NULL,review_after=NULL",
+                [],
+            )
+            .unwrap();
+    }
+
+    let upgraded = AgentVault::open(&path, agent).unwrap();
+    let ranked = upgraded
+        .search_ranked_eligible_candidates(&["upgrade marker".into()], 1, false, now)
+        .unwrap();
+
+    assert_eq!(upgraded.diagnostics().unwrap().schema_version, 2);
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].artifact.id, eligible.id);
 }
 
 #[test]

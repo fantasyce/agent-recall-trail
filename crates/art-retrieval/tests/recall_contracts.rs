@@ -187,6 +187,22 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
     let configurable_runtime = runtime.clone();
     let engine = RecallEngine::new(private, knowledge).with_semantic(runtime);
 
+    let disabled = engine
+        .clone()
+        .with_semantic_unavailable("degraded", "rank_fusion_configuration_invalid");
+    let disabled_bundle = disabled
+        .recall(RecallRequest {
+            mode: RetrievalMode::Semantic,
+            ..RecallRequest::new("meaning only alias")
+        })
+        .unwrap();
+    assert_eq!(disabled.vector_status(), "degraded");
+    assert_eq!(disabled_bundle.effective_mode, RetrievalMode::Lexical);
+    assert_eq!(
+        disabled_bundle.fallback_reason.as_deref(),
+        Some("rank_fusion_configuration_invalid")
+    );
+
     let bundle = engine
         .recall(RecallRequest {
             mode: RetrievalMode::Semantic,
@@ -461,6 +477,16 @@ fn unconfigured_semantic_modes_fall_back_to_byte_equivalent_lexical_items() {
         "fallback remains exact and deterministic",
         "fallback-marker",
     );
+    let disputed = seed_memory(
+        &vault,
+        &agent,
+        "Lexical fallback marker",
+        "conflicting evidence must remain visible as a caution",
+        "fallback-disputed",
+    );
+    vault
+        .dispute(&disputed, "synthetic conflicting evidence")
+        .unwrap();
     let engine = RecallEngine::new(
         vault,
         KnowledgeVault::open(root.path().join("knowledge"), [44; 32]).unwrap(),
@@ -468,6 +494,12 @@ fn unconfigured_semantic_modes_fall_back_to_byte_equivalent_lexical_items() {
     let lexical = engine
         .recall(RecallRequest::new("Lexical fallback marker"))
         .unwrap();
+    assert_eq!(
+        lexical.cautions,
+        [format!(
+            "disputed private memory exists for subject {disputed}"
+        )]
+    );
     for mode in [RetrievalMode::Semantic, RetrievalMode::Hybrid] {
         let fallback = engine
             .recall(RecallRequest {
@@ -490,6 +522,7 @@ fn unconfigured_semantic_modes_fall_back_to_byte_equivalent_lexical_items() {
             serde_json::to_value(&fallback.knowledge_editions).unwrap(),
             serde_json::to_value(&lexical.knowledge_editions).unwrap()
         );
+        assert_eq!(fallback.cautions, lexical.cautions);
     }
 }
 

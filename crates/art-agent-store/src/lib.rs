@@ -18,7 +18,7 @@ use rusqlite::{
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentVaultDiagnostics {
@@ -153,8 +153,8 @@ impl AgentVault {
 
         transaction
             .execute(
-                "INSERT INTO memory_artifacts (id, agent_id, kind, status, title, summary, scope_type, scope_key, sensitivity, current_revision, current_hash, artifact_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-                params![memory.id, self.agent_id.as_str(), memory.payload.kind_name(), format!("{:?}", memory.status).to_lowercase(), memory.title, memory.summary, scope_type(&memory.scope), scope_key(&memory.scope), format!("{:?}", memory.sensitivity).to_lowercase(), memory.current_revision, memory.current_hash, payload_json, memory.created_at.to_rfc3339(), memory.updated_at.to_rfc3339()],
+                "INSERT INTO memory_artifacts (id, agent_id, kind, status, title, summary, scope_type, scope_key, sensitivity, valid_from, valid_until, review_after, current_revision, current_hash, artifact_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                params![memory.id, self.agent_id.as_str(), memory.payload.kind_name(), format!("{:?}", memory.status).to_lowercase(), memory.title, memory.summary, scope_type(&memory.scope), scope_key(&memory.scope), format!("{:?}", memory.sensitivity).to_lowercase(), memory.valid_from.map(|value| value.to_rfc3339()), memory.valid_until.map(|value| value.to_rfc3339()), memory.review_after.map(|value| value.to_rfc3339()), memory.current_revision, memory.current_hash, payload_json, memory.created_at.to_rfc3339(), memory.updated_at.to_rfc3339()],
             )
             .map_err(map_db)?;
         transaction
@@ -629,6 +629,32 @@ impl AgentVault {
         })
     }
 
+    pub fn search_ranked_disputed_ids(
+        &self,
+        terms: &[String],
+        limit: usize,
+    ) -> ArtResult<Vec<String>> {
+        if !(1..=2_048).contains(&limit) {
+            return Err(ArtError::InvalidInput(
+                "candidate limit must be 1..=2048".into(),
+            ));
+        }
+        let connection = open_connection(&self.path)?;
+        let expression = fts_expression(terms)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT a.id FROM memory_fts f JOIN memory_artifacts a ON a.id=f.memory_id WHERE memory_fts MATCH ?1 AND a.agent_id=?2 AND a.status='disputed' ORDER BY rank,a.updated_at DESC,a.id ASC LIMIT ?3",
+            )
+            .map_err(map_db)?;
+        statement
+            .query_map(params![expression, self.agent_id.as_str(), limit], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(map_db)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db)
+    }
+
     pub fn rebuild_search_index(&self) -> ArtResult<u64> {
         let mut connection = open_connection(&self.path)?;
         let transaction = connection
@@ -1009,7 +1035,7 @@ impl AgentVault {
         let search_index_count = count("memory_fts")?;
         Ok(AgentVaultDiagnostics {
             schema_version,
-            migration_checksum: hex_digest(b"art.agent-vault.schema.v1"),
+            migration_checksum: hex_digest(b"art.agent-vault.schema.v2"),
             database_kind,
             bound_agent_id,
             integrity_ok: integrity == "ok",
@@ -1223,7 +1249,7 @@ fn update_artifact(
     let status = memory.status;
     transaction
         .execute(
-            "UPDATE memory_artifacts SET status=?2,artifact_json=?3,updated_at=?4,superseded_by=COALESCE(?5,superseded_by),title=?6,summary=?7,current_revision=?8,current_hash=?9 WHERE id=?1",
+            "UPDATE memory_artifacts SET status=?2,artifact_json=?3,updated_at=?4,superseded_by=COALESCE(?5,superseded_by),title=?6,summary=?7,current_revision=?8,current_hash=?9,valid_from=?10,valid_until=?11,review_after=?12 WHERE id=?1",
             params![
                 memory.id,
                 format!("{status:?}").to_lowercase(),
@@ -1235,6 +1261,9 @@ fn update_artifact(
                 memory.summary,
                 memory.current_revision,
                 memory.current_hash,
+                memory.valid_from.map(|value| value.to_rfc3339()),
+                memory.valid_until.map(|value| value.to_rfc3339()),
+                memory.review_after.map(|value| value.to_rfc3339()),
             ],
         )
         .map_err(map_db)?;
@@ -1283,6 +1312,38 @@ fn migrate(connection: &mut Connection, agent_id: &AgentId) -> ArtResult<()> {
         }
         Some((kind, owner, _)) if kind != "agent-vault" || owner != agent_id.as_str() => {
             return Err(ArtError::IdentityMismatch);
+        }
+        Some((_kind, _owner, version)) if version < SCHEMA_VERSION => {
+            let rows = {
+                let mut statement = transaction
+                    .prepare("SELECT id,artifact_json FROM memory_artifacts ORDER BY id")
+                    .map_err(map_db)?;
+                statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(map_db)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(map_db)?
+            };
+            for (memory_id, artifact_json) in rows {
+                let memory: MemoryArtifact = serde_json::from_str(&artifact_json)
+                    .map_err(|error| ArtError::Internal(error.to_string()))?;
+                transaction
+                    .execute(
+                        "UPDATE memory_artifacts SET valid_from=?2,valid_until=?3,review_after=?4 WHERE id=?1",
+                        params![
+                            memory_id,
+                            memory.valid_from.map(|value| value.to_rfc3339()),
+                            memory.valid_until.map(|value| value.to_rfc3339()),
+                            memory.review_after.map(|value| value.to_rfc3339()),
+                        ],
+                    )
+                    .map_err(map_db)?;
+            }
+            transaction
+                .execute("UPDATE art_meta SET schema_version=?1", [SCHEMA_VERSION])
+                .map_err(map_db)?;
         }
         Some(_) => {}
     }

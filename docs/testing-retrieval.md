@@ -44,7 +44,9 @@ These thresholds qualify ART's stable default product path. An operator may run
 the Python harness directly with `--mode semantic` or `--mode hybrid`, an
 owner-only `--embedding-config`, and the endpoint's lowercase SHA-256
 `--provider-fingerprint`. The harness rebuilds task-owned projections and binds
-the fingerprint into its output. Run lexical and the selected optional mode
+the supplied fingerprint to the endpoint fingerprint reported by ART's vector
+reindex, rejects any query that falls back from the requested mode, and binds
+the verified fingerprint into its output. Run lexical and the selected optional mode
 against the same fixture for a paired comparison. The resulting quality belongs
 to that model, revision, dimensions, corpus construction, and endpoint
 configuration; ART does not advertise provider quality as product quality.

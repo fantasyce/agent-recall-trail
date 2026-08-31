@@ -22,8 +22,8 @@ use art_mcp::{ArtMcpServer, run_stdio_server};
 use art_retrieval::{
     EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RankFusionPolicy, RecallDetail,
     RecallEngine, RecallRequest, RetrievalMode, SemanticProjection, SemanticRuntime,
-    knowledge_semantic_documents, knowledge_semantic_path, private_semantic_documents,
-    private_semantic_path,
+    knowledge_semantic_path, knowledge_semantic_snapshot, private_semantic_path,
+    private_semantic_snapshot,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
@@ -562,6 +562,9 @@ async fn run(cli: Cli) -> ArtResult<()> {
             } else {
                 None
             };
+            let provider_fingerprint = embedding
+                .as_ref()
+                .map(|(endpoint, _)| endpoint.fingerprint().value);
             let mut private_memories = None;
             let mut private_navigation = None;
             let mut private_vectors = None;
@@ -575,11 +578,11 @@ async fn run(cli: Cli) -> ArtResult<()> {
                     private_navigation = Some(vault.rebuild_navigation()?);
                 }
                 if let Some((endpoint, provider)) = &embedding {
-                    let documents = private_semantic_documents(&vault)?;
+                    let (source_epoch, documents) = private_semantic_snapshot(&vault)?;
                     private_vectors = Some(SemanticProjection::rebuild_with_progress(
                         &private_semantic_path(vault.path()),
                         endpoint,
-                        &vault.index_epoch()?,
+                        &source_epoch,
                         &documents,
                         provider.as_ref(),
                         &|progress| {
@@ -603,11 +606,11 @@ async fn run(cli: Cli) -> ArtResult<()> {
                         None
                     };
                     let vector_count = if let Some((endpoint, provider)) = &embedding {
-                        let documents = knowledge_semantic_documents(&vault)?;
+                        let (source_epoch, documents) = knowledge_semantic_snapshot(&vault)?;
                         Some(SemanticProjection::rebuild_with_progress(
                             &knowledge_semantic_path(&paths.knowledge_vault()),
                             endpoint,
-                            &vault.index_epoch()?,
+                            &source_epoch,
                             &documents,
                             provider.as_ref(),
                             &|progress| {
@@ -628,7 +631,7 @@ async fn run(cli: Cli) -> ArtResult<()> {
                 (None, None, None)
             };
             print_json(
-                &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"private_navigation":private_navigation,"private_vectors":private_vectors,"knowledge":knowledge,"knowledge_editions":knowledge_editions,"knowledge_navigation":knowledge_navigation,"knowledge_vectors":knowledge_vectors}),
+                &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"private_navigation":private_navigation,"private_vectors":private_vectors,"knowledge":knowledge,"knowledge_editions":knowledge_editions,"knowledge_navigation":knowledge_navigation,"knowledge_vectors":knowledge_vectors,"provider_fingerprint":provider_fingerprint}),
             )
         }
     }

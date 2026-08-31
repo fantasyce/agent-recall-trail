@@ -61,6 +61,25 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[round((len(ordered) - 1) * fraction)]
 
 
+def execution_is_qualified(
+    requested_mode: str, effective_modes: set[str], vector_statuses: set[str]
+) -> bool:
+    if effective_modes != {requested_mode}:
+        return False
+    return requested_mode not in {"semantic", "hybrid"} or vector_statuses == {"ready"}
+
+
+def bind_provider_fingerprint(expected: str, actual: str) -> str:
+    valid = lambda value: len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
+    if not valid(expected) or not valid(actual) or expected != actual:
+        raise ValueError(
+            "provider fingerprint does not match the endpoint loaded by ART"
+        )
+    return actual
+
+
 def metric_at_k(ranking: list[str], relevant: dict[str, int], k: int) -> dict[str, float]:
     ranking = ranking[:k]
     positive = {document: score for document, score in relevant.items() if score > 0}
@@ -105,7 +124,7 @@ def create_fixture(
     work: Path,
     mode: str,
     embedding_config: Path | None,
-) -> tuple[Path, dict[str, str]]:
+) -> tuple[Path, dict[str, str], str | None]:
     home = work / f"home-{dataset}"
     run([str(art), "init", "--confirm", "--home", str(home)])
     run(
@@ -183,7 +202,8 @@ def create_fixture(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(embedding_config, target)
         target.chmod(0o600)
-        run(
+        reindex = json.loads(
+            run(
             [
                 str(art),
                 "--home",
@@ -194,8 +214,14 @@ def create_fixture(
                 "--knowledge",
                 "--vectors",
             ]
+            )
         )
-    return home, edition_to_document
+        provider_fingerprint = reindex.get("provider_fingerprint")
+        if not isinstance(provider_fingerprint, str):
+            raise ValueError("ART vector reindex did not report its provider fingerprint")
+    else:
+        provider_fingerprint = None
+    return home, edition_to_document, provider_fingerprint
 
 
 def evaluate_dataset(
@@ -211,12 +237,20 @@ def evaluate_dataset(
     all_queries = {
         str(row["_id"]): row["text"] for row in load_jsonl(source / "queries.jsonl")
     }
-    home, edition_to_document = create_fixture(
+    home, edition_to_document, actual_provider_fingerprint = create_fixture(
         art, dataset, source, work, mode, embedding_config
+    )
+    bound_provider_fingerprint = (
+        bind_provider_fingerprint(
+            provider_fingerprint or "", actual_provider_fingerprint or ""
+        )
+        if mode in {"semantic", "hybrid"}
+        else None
     )
     rankings = {}
     latencies = []
     vector_statuses = set()
+    effective_modes = set()
     for query_id in qrels:
         started = time.perf_counter()
         payload = json.loads(
@@ -241,22 +275,27 @@ def evaluate_dataset(
         )
         latencies.append((time.perf_counter() - started) * 1000)
         vector_statuses.add(payload["vector_status"])
+        effective_modes.add(payload["effective_mode"])
         rankings[query_id] = [
             edition_to_document[item["subject_ref"].removeprefix("knowledge:")]
             for item in payload["knowledge_editions"]
         ]
     metrics = aggregate(rankings, qrels)
     gates = GATES[dataset]
+    execution_qualified = execution_is_qualified(
+        mode, effective_modes, vector_statuses
+    )
     passed = (
         metrics["@10"]["recall"] >= gates["recall@10"]
         and metrics["@10"]["ndcg"] >= gates["ndcg@10"]
         and metrics["@3"]["ndcg"] >= gates["ndcg@3"]
         and percentile(latencies, 0.95) < 350.0
+        and execution_qualified
     )
     return {
         "dataset": dataset,
         "mode": mode,
-        "provider_fingerprint": provider_fingerprint,
+        "provider_fingerprint": bound_provider_fingerprint,
         "corpus_documents": len(edition_to_document),
         "test_queries": len(qrels),
         "relevance_judgments": sum(len(values) for values in qrels.values()),
@@ -267,7 +306,9 @@ def evaluate_dataset(
             "p99_ms": round(percentile(latencies, 0.99), 3),
         },
         "empty_result_queries": sum(not ranking for ranking in rankings.values()),
+        "effective_mode": sorted(effective_modes),
         "vector_status": sorted(vector_statuses),
+        "execution_qualified": execution_qualified,
         "passed": passed,
     }
 
