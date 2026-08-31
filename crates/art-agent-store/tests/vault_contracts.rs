@@ -292,6 +292,26 @@ fn version_one_upgrade_backfills_validity_before_serving_searches() {
 }
 
 #[test]
+fn semantic_epoch_changes_when_a_private_memory_crosses_its_validity_boundary() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(root.path().join("art.sqlite3"), agent.clone()).unwrap();
+    let now = Utc::now();
+    let mut future = ranked_memory(&agent, "future semantic", "future semantic");
+    future.valid_from = Some(now + Duration::hours(1));
+    vault
+        .capture(&future, &[anchor(&agent)], "semantic-epoch-future")
+        .unwrap();
+
+    assert_ne!(
+        vault.semantic_index_epoch(now).unwrap(),
+        vault
+            .semantic_index_epoch(now + Duration::hours(2))
+            .unwrap()
+    );
+}
+
+#[test]
 fn eight_connections_can_write_one_agent_without_crossing_vaults() {
     let root = tempdir().unwrap();
     let codex = AgentId::from_str("codex-primary").unwrap();

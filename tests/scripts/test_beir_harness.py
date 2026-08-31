@@ -35,6 +35,13 @@ class BeirHarnessContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             BENCHMARK.bind_provider_fingerprint(fingerprint, "b" * 64)
 
+    def test_full_scan_is_reported_as_a_core_local_product_path(self):
+        self.assertEqual(BENCHMARK.qualification_scope("lexical"), "art_default")
+        self.assertEqual(BENCHMARK.qualification_scope("full_scan"), "art_full_scan")
+        self.assertEqual(
+            BENCHMARK.qualification_scope("semantic"), "provider_specific"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

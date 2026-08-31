@@ -146,6 +146,13 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
         "ordinary lexical document",
         "semantic-lexical-exact",
     );
+    let candidate = seed_candidate_memory(
+        &private,
+        &agent,
+        "Candidate semantic supplement",
+        "ART_EXPLICIT_CANDIDATE_MARKER",
+        "semantic-candidate",
+    );
     let knowledge_root = root.path().join("knowledge");
     let knowledge = KnowledgeVault::open(&knowledge_root, [45; 32]).unwrap();
     let endpoint = semantic_endpoint(root.path());
@@ -158,7 +165,7 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
     SemanticProjection::rebuild(
         &private_path,
         &endpoint,
-        &private.index_epoch().unwrap(),
+        &private.semantic_index_epoch(Utc::now()).unwrap(),
         &private_semantic_documents(&private).unwrap(),
         provider.as_ref(),
     )
@@ -175,7 +182,7 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
         &endpoint,
         provider,
         &private_path,
-        &private.index_epoch().unwrap(),
+        &private.semantic_index_epoch(Utc::now()).unwrap(),
         &knowledge_path,
         &knowledge.index_epoch().unwrap(),
     )
@@ -218,6 +225,58 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
             .match_reasons
             .contains(&"semantic_rank".into())
     );
+    let without_candidate = engine
+        .recall(RecallRequest {
+            mode: RetrievalMode::Semantic,
+            max_private_results: Some(2),
+            ..RecallRequest::new("ART_EXPLICIT_CANDIDATE_MARKER")
+        })
+        .unwrap();
+    assert!(
+        without_candidate
+            .private_memories
+            .iter()
+            .all(|item| item.subject_ref != format!("memory:{candidate}@1"))
+    );
+    let with_candidate = engine
+        .recall(RecallRequest {
+            mode: RetrievalMode::Semantic,
+            include_candidates: true,
+            max_private_results: Some(3),
+            ..RecallRequest::new("ART_EXPLICIT_CANDIDATE_MARKER")
+        })
+        .unwrap();
+    let recalled_candidate = with_candidate
+        .private_memories
+        .iter()
+        .find(|item| item.subject_ref == format!("memory:{candidate}@1"))
+        .unwrap_or_else(|| {
+            panic!(
+                "explicitly included candidate should use the local lexical supplement: {with_candidate:#?}"
+            )
+        });
+    assert!(
+        recalled_candidate
+            .match_reasons
+            .contains(&"bm25_rank".into())
+    );
+    assert!(
+        !recalled_candidate
+            .match_reasons
+            .contains(&"semantic_rank".into())
+    );
+    let candidate_position = with_candidate
+        .private_memories
+        .iter()
+        .position(|item| item.subject_ref == format!("memory:{candidate}@1"))
+        .unwrap();
+    assert_eq!(candidate_position, 2);
+    assert!(
+        with_candidate.private_memories[..candidate_position]
+            .iter()
+            .all(|item| item.status == "active" && item.score > recalled_candidate.score),
+        "a local Candidate supplement must not displace or outrank semantic Active memory: {with_candidate:#?}"
+    );
     let hybrid = engine
         .recall(RecallRequest {
             mode: RetrievalMode::Hybrid,
@@ -256,7 +315,7 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
         &endpoint,
         failing_provider,
         &private_path,
-        &fallback_private.index_epoch().unwrap(),
+        &fallback_private.semantic_index_epoch(Utc::now()).unwrap(),
         &knowledge_path,
         &fallback_knowledge.index_epoch().unwrap(),
     )
@@ -305,7 +364,7 @@ fn long_running_semantic_runtime_falls_back_when_canonical_epochs_change() {
     SemanticProjection::rebuild(
         &private_path,
         &endpoint,
-        &private.index_epoch().unwrap(),
+        &private.semantic_index_epoch(Utc::now()).unwrap(),
         &private_semantic_documents(&private).unwrap(),
         provider.as_ref(),
     )
@@ -322,7 +381,7 @@ fn long_running_semantic_runtime_falls_back_when_canonical_epochs_change() {
         &endpoint,
         provider,
         &private_path,
-        &private.index_epoch().unwrap(),
+        &private.semantic_index_epoch(Utc::now()).unwrap(),
         &knowledge_path,
         &knowledge.index_epoch().unwrap(),
     )
@@ -393,14 +452,34 @@ fn semantic_projection_documents_apply_private_governance_before_embedding() {
         "semantic-disputed",
     );
     vault.dispute(&disputed, "conflicting evidence").unwrap();
+    seed_memory_with_validity(
+        &vault,
+        &agent,
+        "Future",
+        "future body must not be embedded early",
+        "semantic-future-private",
+        Some(Utc::now() + Duration::days(1)),
+        None,
+    );
+    seed_memory_with_validity(
+        &vault,
+        &agent,
+        "Expired",
+        "expired body must not be sent to a provider",
+        "semantic-expired-private",
+        None,
+        Some(Utc::now() - Duration::seconds(1)),
+    );
 
     let documents = private_semantic_documents(&vault).unwrap();
     assert_eq!(documents.len(), 1);
     assert!(!documents[0].text.contains("disputed body"));
+    assert!(!documents[0].text.contains("future body"));
+    assert!(!documents[0].text.contains("expired body"));
 }
 
 #[test]
-fn future_valid_private_memory_becomes_semantically_recallable_without_reindex() {
+fn future_valid_private_memory_requires_reindex_and_falls_back_to_lexical() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();
     let private = AgentVault::open(root.path().join("agent/art.sqlite3"), agent.clone()).unwrap();
@@ -425,7 +504,7 @@ fn future_valid_private_memory_becomes_semantically_recallable_without_reindex()
     SemanticProjection::rebuild(
         &private_path,
         &endpoint,
-        &private.index_epoch().unwrap(),
+        &private.semantic_index_epoch(Utc::now()).unwrap(),
         &private_semantic_documents(&private).unwrap(),
         provider.as_ref(),
     )
@@ -442,7 +521,7 @@ fn future_valid_private_memory_becomes_semantically_recallable_without_reindex()
         &endpoint,
         provider,
         &private_path,
-        &private.index_epoch().unwrap(),
+        &private.semantic_index_epoch(Utc::now()).unwrap(),
         &knowledge_path,
         &knowledge.index_epoch().unwrap(),
     )
@@ -454,10 +533,15 @@ fn future_valid_private_memory_becomes_semantically_recallable_without_reindex()
         .recall(RecallRequest {
             mode: RetrievalMode::Semantic,
             max_private_results: Some(1),
-            ..RecallRequest::new("meaning only alias")
+            ..RecallRequest::new("FUTURE_SEMANTIC_MARKER")
         })
         .unwrap();
-    assert_eq!(recalled.vector_status, "ready");
+    assert_eq!(recalled.effective_mode, RetrievalMode::Lexical);
+    assert_eq!(recalled.vector_status, "stale");
+    assert_eq!(
+        recalled.fallback_reason.as_deref(),
+        Some("semantic_projection_stale")
+    );
     assert_eq!(recalled.private_memories.len(), 1);
     assert_eq!(
         recalled.private_memories[0].subject_ref,

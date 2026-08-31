@@ -45,7 +45,7 @@ art --home /absolute/art-home reindex \
   --agent codex-primary --knowledge --vectors
 ```
 
-Progress is emitted as bounded JSON counters on stderr. Interrupted staging is retained and resumes completed batches; the previous complete projection remains active until the replacement validates and is installed atomically. Document collection must observe the same canonical epoch before and after its snapshot; concurrent canonical change rejects that rebuild instead of stamping old documents with a new epoch. Vectors are disposable and excluded from backup, restore, knowledge export, and public source control.
+Progress is emitted as bounded JSON counters on stderr. Interrupted staging is retained and resumes completed batches; the previous complete projection remains active until the replacement validates and is installed atomically. Document collection must observe the same canonical epoch before and after its snapshot; concurrent canonical change rejects that rebuild instead of stamping old documents with a new epoch. Private vector rebuild sends only memory that is Active and validity-eligible at collection time. A later validity boundary marks the projection stale and semantic/hybrid requests fall back to lexical until the operator runs vector reindex again. Vectors are disposable and excluded from backup, restore, knowledge export, and public source control.
 
 Hybrid fusion is also explicit and user-configurable. To override the versioned
 default, create `<ART_HOME>/config/art/retrieval/fusion.json` as one regular

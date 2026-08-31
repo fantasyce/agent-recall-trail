@@ -199,7 +199,7 @@ impl RecallEngine {
 
     fn semantic_epochs_match(&self, runtime: &SemanticRuntime) -> ArtResult<bool> {
         Ok(runtime.source_epochs_match(
-            &self.private_vault.index_epoch()?,
+            &self.private_vault.semantic_index_epoch(Utc::now())?,
             &self.knowledge_vault.index_epoch()?,
         ))
     }
@@ -352,7 +352,15 @@ impl RecallEngine {
                 })
                 .collect()
         } else if effective_mode == RetrievalMode::Semantic {
-            Vec::new()
+            if request.include_candidates {
+                self.private_vault
+                    .search_ranked_eligible_candidates(&terms, private_candidate_limit, true, now)?
+                    .into_iter()
+                    .filter(|candidate| candidate.artifact.status == MemoryStatus::Candidate)
+                    .collect()
+            } else {
+                Vec::new()
+            }
         } else {
             self.private_vault.search_ranked_eligible_candidates(
                 &terms,
@@ -398,7 +406,12 @@ impl RecallEngine {
             }
             let lexical_match = lexical_match_indexed(&query, &lexical);
             let selected = match effective_mode {
-                RetrievalMode::Semantic => semantic_rank.is_some(),
+                RetrievalMode::Semantic => {
+                    semantic_rank.is_some()
+                        || (request.include_candidates
+                            && memory.status == MemoryStatus::Candidate
+                            && lexical_match.is_some())
+                }
                 RetrievalMode::Hybrid => lexical_match.is_some() || semantic_rank.is_some(),
                 _ => lexical_match.is_some(),
             };
@@ -432,12 +445,22 @@ impl RecallEngine {
                 if semantic_rank.is_some() {
                     reasons.push("semantic_rank".into());
                 }
-                let score = fused_score(
-                    effective_mode,
-                    lexical_score,
-                    semantic_rank,
-                    &self.rank_fusion_policy,
-                ) * authority;
+                let local_candidate_supplement = effective_mode == RetrievalMode::Semantic
+                    && semantic_rank.is_none()
+                    && memory.status == MemoryStatus::Candidate;
+                if local_candidate_supplement {
+                    reasons.push("lexical_candidate_supplement".into());
+                }
+                let score = if local_candidate_supplement {
+                    lexical_score.unwrap_or_default() * authority
+                } else {
+                    fused_score(
+                        effective_mode,
+                        lexical_score,
+                        semantic_rank,
+                        &self.rank_fusion_policy,
+                    ) * authority
+                };
                 memories.push(RecallItem {
                     subject_ref,
                     title: memory.title.clone(),
@@ -604,6 +627,9 @@ impl RecallEngine {
             map_status: "unavailable".into(),
             candidate_sources: match effective_mode {
                 RetrievalMode::FullScan => vec!["canonical_full_scan".into()],
+                RetrievalMode::Semantic if request.include_candidates => {
+                    vec!["semantic".into(), "lexical_candidates".into()]
+                }
                 RetrievalMode::Semantic => vec!["semantic".into()],
                 RetrievalMode::Hybrid => vec!["lexical".into(), "semantic".into()],
                 RetrievalMode::Lexical => vec!["lexical".into()],

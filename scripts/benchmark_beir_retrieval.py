@@ -80,6 +80,15 @@ def bind_provider_fingerprint(expected: str, actual: str) -> str:
     return actual
 
 
+def qualification_scope(mode: str) -> str:
+    return {
+        "lexical": "art_default",
+        "full_scan": "art_full_scan",
+        "semantic": "provider_specific",
+        "hybrid": "provider_specific",
+    }[mode]
+
+
 def metric_at_k(ranking: list[str], relevant: dict[str, int], k: int) -> dict[str, float]:
     ranking = ranking[:k]
     positive = {document: score for document, score in relevant.items() if score > 0}
@@ -358,9 +367,7 @@ def main() -> None:
         "schema": "art.beir.retrieval-gate.v1",
         "art_version": run([str(args.art), "--version"]).strip(),
         "mode": args.mode,
-        "qualification_scope": (
-            "art_default" if args.mode == "lexical" else "provider_specific"
-        ),
+        "qualification_scope": qualification_scope(args.mode),
         "provider_fingerprint": args.provider_fingerprint,
         "datasets": results,
         "elapsed_seconds": round(time.time() - started, 3),

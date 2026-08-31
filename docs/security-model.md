@@ -15,7 +15,7 @@ ART protects private Agent experience, source locations and excerpts, knowledge 
 - Tool output is object-shaped and has stable schemas for strict MCP clients.
 - Debug logging is clamped to ART targets; stdio remains JSON-RPC only and request bodies are not echoed to stderr.
 - SQLite busy, read-only, simulated disk-full, migration-race, WAL, corrupted projection, and partial-publication behavior is fail-closed and tested.
-- Optional semantic transport is outbound HTTPS only, rejects redirects and URL credentials, bounds request/response sizes, reads an optional owner-only token at request time, and reports only safe provider/projection status.
+- Optional semantic transport is outbound HTTPS only, rejects redirects and URL credentials, bounds request/response sizes, reads an optional owner-only token at request time, and reports only safe provider/projection status. Vector rebuild sends only private memory that is Active and validity-eligible at collection time; Candidate, future-valid, expired, disputed, superseded, and archived bodies remain local.
 
 ## Prompt injection
 

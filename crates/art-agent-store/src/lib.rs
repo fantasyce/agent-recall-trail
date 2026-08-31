@@ -435,6 +435,43 @@ impl AgentVault {
         Ok(hex::encode(hasher.finalize()))
     }
 
+    pub fn semantic_index_epoch(&self, now: DateTime<Utc>) -> ArtResult<String> {
+        let connection = open_connection(&self.path)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id,current_hash,status,updated_at,valid_from,valid_until FROM memory_artifacts WHERE agent_id=?1 AND status='active' AND (valid_from IS NULL OR valid_from<=?2) AND (valid_until IS NULL OR valid_until>?2) ORDER BY id",
+            )
+            .map_err(map_db)?;
+        let rows = statement
+            .query_map(params![self.agent_id.as_str(), now.to_rfc3339()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .map_err(map_db)?;
+        let mut hasher = Sha256::new();
+        for row in rows {
+            let (id, hash, status, updated, valid_from, valid_until) = row.map_err(map_db)?;
+            for value in [
+                Some(id),
+                Some(hash),
+                Some(status),
+                Some(updated),
+                valid_from,
+                valid_until,
+            ] {
+                hasher.update(value.unwrap_or_default());
+                hasher.update([0]);
+            }
+        }
+        Ok(hex::encode(hasher.finalize()))
+    }
+
     pub fn rebuild_navigation(&self) -> ArtResult<u64> {
         let source_epoch = self.index_epoch()?;
         let eligible: Vec<_> = self

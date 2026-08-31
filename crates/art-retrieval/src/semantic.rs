@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, fs, path::Path, sync::Arc};
 use art_agent_store::AgentVault;
 use art_domain::{ArtError, ArtResult, memory::MemoryStatus};
 use art_knowledge::KnowledgeVault;
+use chrono::Utc;
 
 use crate::{
     EmbeddingEndpoint, EmbeddingInput, EmbeddingProvider, SemanticDocument, SemanticProjection,
@@ -76,10 +77,15 @@ impl SemanticRuntime {
 }
 
 pub fn private_semantic_documents(vault: &AgentVault) -> ArtResult<Vec<SemanticDocument>> {
+    let now = Utc::now();
     vault
         .list()?
         .into_iter()
-        .filter(|memory| memory.status == MemoryStatus::Active)
+        .filter(|memory| {
+            memory.status == MemoryStatus::Active
+                && memory.valid_from.is_none_or(|start| start <= now)
+                && memory.valid_until.is_none_or(|end| end > now)
+        })
         .map(|memory| {
             SemanticDocument::new(
                 format!("memory:{}@{}", memory.id, memory.current_revision),
@@ -129,7 +135,10 @@ where
 }
 
 pub fn private_semantic_snapshot(vault: &AgentVault) -> ArtResult<(String, Vec<SemanticDocument>)> {
-    stable_semantic_snapshot(|| vault.index_epoch(), || private_semantic_documents(vault))
+    stable_semantic_snapshot(
+        || vault.semantic_index_epoch(Utc::now()),
+        || private_semantic_documents(vault),
+    )
 }
 
 pub fn knowledge_semantic_snapshot(

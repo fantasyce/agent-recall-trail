@@ -522,8 +522,10 @@ fn configured_semantic(
     let Ok(provider) = OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) else {
         return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
     };
-    let (Ok(private_epoch), Ok(knowledge_epoch)) = (private.index_epoch(), knowledge.index_epoch())
-    else {
+    let (Ok(private_epoch), Ok(knowledge_epoch)) = (
+        private.semantic_index_epoch(Utc::now()),
+        knowledge.index_epoch(),
+    ) else {
         return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
     };
     match SemanticRuntime::open(

@@ -25,6 +25,7 @@ use art_retrieval::{
     knowledge_semantic_path, knowledge_semantic_snapshot, private_semantic_path,
     private_semantic_snapshot,
 };
+use chrono::Utc;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1415,8 +1416,10 @@ fn configured_semantic(
     let Ok(provider) = OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) else {
         return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
     };
-    let (Ok(private_epoch), Ok(knowledge_epoch)) = (private.index_epoch(), knowledge.index_epoch())
-    else {
+    let (Ok(private_epoch), Ok(knowledge_epoch)) = (
+        private.semantic_index_epoch(Utc::now()),
+        knowledge.index_epoch(),
+    ) else {
         return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
     };
     match SemanticRuntime::open(
