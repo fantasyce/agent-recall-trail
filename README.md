@@ -21,7 +21,7 @@ ART exposes one recall API with four explicit retrieval modes: `lexical`, `full_
 - `semantic` uses only an explicitly configured embedding endpoint and disposable local vector projections.
 - `hybrid` combines lexical and semantic ranks. If the optional provider or projection is unavailable, ART returns the unchanged lexical result and reports the fallback.
 
-Embedding is an optional adapter supplied and operated by the user. ART does not bundle, download, train, select, or make quality claims for a model merely because its endpoint is compatible.
+ART's optional embedding adapter is supplied and operated by the user. ART does not bundle, download, train, select, or make quality claims for a model merely because its endpoint is compatible.
 
 ## Quick start
 
