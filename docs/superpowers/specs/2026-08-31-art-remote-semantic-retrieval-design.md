@@ -1,6 +1,10 @@
 # ART Remote Semantic Retrieval Design
 
-**Status:** Approved by the operator on 2026-08-31
+> **Superseded on 2026-08-31. Do not implement this design.** It is retained as
+> historical experiment context. The current ART 0.3 architecture contract is
+> `2026-08-31-art-progressive-recall-architecture-design.md`.
+
+**Status:** Superseded
 
 **Target release:** ART 0.3.0
 

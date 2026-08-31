@@ -1,5 +1,10 @@
 # ART Remote Semantic Retrieval Implementation Plan
 
+> **Superseded on 2026-08-31. Do not execute this plan.** It is retained as a
+> historical experiment record. The replacement design is
+> `../specs/2026-08-31-art-progressive-recall-architecture-design.md`; a new
+> implementation plan must be written only after that design is reviewed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add fail-open hybrid BM25/Qwen retrieval to ART, prove its quality with paired public BEIR evaluation, and cut over the formal Codex/DSH installation only if it improves.
