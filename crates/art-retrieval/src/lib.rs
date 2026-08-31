@@ -460,14 +460,9 @@ impl RecallEngine {
             self.knowledge_vault
                 .search_ranked_candidates(&terms, knowledge_candidate_limit)?
         };
-        let current_knowledge: BTreeMap<_, _> = self
-            .knowledge_vault
-            .list_current()?
-            .into_iter()
-            .map(|edition| (edition.edition_id.clone(), edition))
-            .collect();
+        let current_knowledge = self.knowledge_vault.current_edition_ids()?;
         knowledge_candidates
-            .retain(|candidate| current_knowledge.contains_key(&candidate.edition.edition_id));
+            .retain(|candidate| current_knowledge.contains(&candidate.edition.edition_id));
         let mut knowledge_ids: BTreeSet<_> = knowledge_candidates
             .iter()
             .map(|candidate| candidate.edition.edition_id.clone())
@@ -476,9 +471,10 @@ impl RecallEngine {
             let Some(edition_id) = rank.subject_ref.strip_prefix("knowledge:") else {
                 continue;
             };
-            let Some(edition) = current_knowledge.get(edition_id).cloned() else {
+            if !current_knowledge.contains(edition_id) {
                 continue;
-            };
+            }
+            let edition = self.knowledge_vault.read(edition_id)?;
             if knowledge_ids.insert(edition.edition_id.clone()) {
                 knowledge_candidates.push(RankedEditionCandidate {
                     edition,

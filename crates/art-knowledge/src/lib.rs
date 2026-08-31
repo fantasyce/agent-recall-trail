@@ -484,6 +484,19 @@ impl KnowledgeVault {
         ids.map(|id| self.read(&id.map_err(db_error)?)).collect()
     }
 
+    pub fn current_edition_ids(&self) -> ArtResult<std::collections::BTreeSet<String>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT edition_id FROM edition_projections WHERE current=1 AND revoked=0 ORDER BY edition_id",
+            )
+            .map_err(db_error)?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(db_error)?;
+        ids.collect::<Result<_, _>>().map_err(db_error)
+    }
+
     pub fn search_ranked_candidates(
         &self,
         terms: &[String],
