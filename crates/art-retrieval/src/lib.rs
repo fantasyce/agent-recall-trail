@@ -4,6 +4,7 @@ mod embedding;
 mod navigation;
 mod policy;
 mod ranking;
+mod semantic_projection;
 
 pub use embedding::{
     EmbeddingEndpoint, EmbeddingInput, EmbeddingProvider, OpenAiCompatibleEmbeddingProvider,
@@ -11,6 +12,10 @@ pub use embedding::{
 };
 pub use navigation::NavigationTopic;
 pub use policy::{RecallDetail, RetrievalMode};
+pub use semantic_projection::{
+    SemanticDocument, SemanticProjection, SemanticRank, knowledge_semantic_path,
+    private_semantic_path,
+};
 
 use std::{cmp::Ordering, collections::BTreeSet, fs, sync::OnceLock};
 
