@@ -1,6 +1,6 @@
 # Community launch copy
 
-Status: approved launch copy. GitHub Release, MCP Registry, and project site were published on 2026-08-31; account-authenticated community channels remain recorded in the launch manifest.
+Status: published to GitHub Discussion #12 on 2026-08-31. GitHub Release, MCP Registry, project site, and the public design-partner call are also live; other account-authenticated community channels remain recorded in the launch manifest.
 
 ## Short post
 

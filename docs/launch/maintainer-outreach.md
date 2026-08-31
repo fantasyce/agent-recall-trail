@@ -1,6 +1,6 @@
 # Maintainer outreach
 
-Status: approved copy; not sent because no owner-approved recipient list or authenticated messaging channel was available.
+Status: approved copy. The public design-partner call was updated for v0.3.0 on 2026-08-31; no direct maintainer message was sent because no owner-approved recipient list was placed in scope.
 
 Subject: ART v0.3.0 — progressive recall for review-gated Agent knowledge
 
