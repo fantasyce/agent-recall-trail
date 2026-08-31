@@ -4,6 +4,7 @@ mod embedding;
 mod navigation;
 mod policy;
 mod ranking;
+mod semantic;
 mod semantic_projection;
 
 pub use embedding::{
@@ -12,12 +13,20 @@ pub use embedding::{
 };
 pub use navigation::NavigationTopic;
 pub use policy::{RecallDetail, RetrievalMode};
+pub use semantic::{
+    SemanticRanks, SemanticRuntime, knowledge_semantic_documents, private_semantic_documents,
+};
 pub use semantic_projection::{
     SemanticDocument, SemanticProjection, SemanticRank, knowledge_semantic_path,
     private_semantic_path,
 };
 
-use std::{cmp::Ordering, collections::BTreeSet, fs, sync::OnceLock};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    sync::OnceLock,
+};
 
 use art_agent_store::{AgentVault, RankedMemoryCandidate};
 use art_domain::{
@@ -111,6 +120,7 @@ impl RecallRequest {
 pub struct RecallEngine {
     private_vault: AgentVault,
     knowledge_vault: KnowledgeVault,
+    semantic: Option<SemanticRuntime>,
 }
 
 #[derive(Debug)]
@@ -140,7 +150,13 @@ impl RecallEngine {
         Self {
             private_vault,
             knowledge_vault,
+            semantic: None,
         }
+    }
+
+    pub fn with_semantic(mut self, semantic: SemanticRuntime) -> Self {
+        self.semantic = Some(semantic);
+        self
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -161,16 +177,70 @@ impl RecallEngine {
         if request.detail == RecallDetail::Route {
             return self.route(&request);
         }
+        let requested_mode = request.mode;
+        let (mut effective_mode, mut vector_status, mut fallback_reason) = match request.mode {
+            RetrievalMode::Semantic | RetrievalMode::Hybrid if self.semantic.is_none() => (
+                RetrievalMode::Lexical,
+                "unavailable",
+                Some("semantic_unconfigured".to_owned()),
+            ),
+            RetrievalMode::Semantic | RetrievalMode::Hybrid => (request.mode, "ready", None),
+            _ => (request.mode, "unavailable", None),
+        };
         let terms = query.search_terms();
         let private_requested = request.max_private_results.unwrap_or(3);
         let knowledge_requested = request.max_knowledge_results.unwrap_or(3);
         let private_candidate_limit = (private_requested * 64).clamp(512, 2_048);
         let knowledge_candidate_limit = (knowledge_requested * 64).clamp(512, 2_048);
+        let semantic_ranks = if matches!(
+            effective_mode,
+            RetrievalMode::Semantic | RetrievalMode::Hybrid
+        ) {
+            match self
+                .semantic
+                .as_ref()
+                .expect("semantic runtime checked")
+                .rank(
+                    &request.query,
+                    private_candidate_limit,
+                    knowledge_candidate_limit,
+                ) {
+                Ok(ranks) => Some(ranks),
+                Err(_) => {
+                    effective_mode = RetrievalMode::Lexical;
+                    vector_status = "degraded";
+                    fallback_reason = Some("semantic_provider_failure".into());
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let private_semantic: BTreeMap<_, _> = semantic_ranks
+            .as_ref()
+            .map(|ranks| {
+                ranks
+                    .private
+                    .iter()
+                    .map(|rank| (rank.subject_ref.clone(), rank.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let knowledge_semantic: BTreeMap<_, _> = semantic_ranks
+            .as_ref()
+            .map(|ranks| {
+                ranks
+                    .knowledge
+                    .iter()
+                    .map(|rank| (rank.subject_ref.clone(), rank.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let now = Utc::now();
         let mut memories = Vec::new();
         let mut cautions = Vec::new();
-        let full_scan = request.mode == RetrievalMode::FullScan;
-        let private_candidates = if full_scan {
+        let full_scan = effective_mode == RetrievalMode::FullScan;
+        let mut private_candidates = if full_scan {
             self.private_vault
                 .list()?
                 .into_iter()
@@ -180,14 +250,36 @@ impl RecallEngine {
                     lexical_rank: index + 1,
                 })
                 .collect()
+        } else if effective_mode == RetrievalMode::Semantic {
+            Vec::new()
         } else {
             self.private_vault
                 .search_ranked_candidates(&terms, private_candidate_limit)?
         };
+        let mut private_ids: BTreeSet<_> = private_candidates
+            .iter()
+            .map(|candidate| candidate.artifact.id.clone())
+            .collect();
+        for rank in private_semantic.values() {
+            let Some((memory_id, revision)) = parse_memory_ref(&rank.subject_ref) else {
+                continue;
+            };
+            let Ok(memory) = self.private_vault.read(memory_id) else {
+                continue;
+            };
+            if memory.current_revision == revision && private_ids.insert(memory.id.clone()) {
+                private_candidates.push(RankedMemoryCandidate {
+                    artifact: memory,
+                    lexical_rank: rank.rank,
+                });
+            }
+        }
         for candidate in private_candidates {
             let memory = candidate.artifact;
             let text = memory_text(&memory);
             let lexical = LexicalDocument::new(&text);
+            let subject_ref = format!("memory:{}@{}", memory.id, memory.current_revision);
+            let semantic_rank = private_semantic.get(&subject_ref);
             if !eligible_memory(&memory, request.include_candidates, now) {
                 if matches!(memory.status, MemoryStatus::Disputed)
                     && lexical_match_indexed(&query, &lexical).is_some()
@@ -199,35 +291,51 @@ impl RecallEngine {
                 }
                 continue;
             }
-            if let Some(mut lexical_match) = lexical_match_indexed(&query, &lexical) {
+            let lexical_match = lexical_match_indexed(&query, &lexical);
+            let selected = match effective_mode {
+                RetrievalMode::Semantic => semantic_rank.is_some(),
+                RetrievalMode::Hybrid => lexical_match.is_some() || semantic_rank.is_some(),
+                _ => lexical_match.is_some(),
+            };
+            if selected {
                 let status = format!("{:?}", memory.status).to_lowercase();
                 let authority = if memory.status == MemoryStatus::Candidate {
                     0.75
                 } else {
                     1.0
                 };
-                lexical_match.reasons.insert(
-                    0,
-                    if full_scan {
-                        "canonical_full_scan"
-                    } else {
-                        "bm25_rank"
-                    }
-                    .into(),
-                );
-                memories.push(RecallItem {
-                    subject_ref: format!("memory:{}@{}", memory.id, memory.current_revision),
-                    title: memory.title.clone(),
-                    excerpt: truncate(&memory.summary, 360),
-                    origin: RecallOrigin::Memory,
-                    status,
-                    match_reasons: lexical_match.reasons,
-                    score: rank_score(
+                let lexical_score = lexical_match.as_ref().map(|lexical_match| {
+                    rank_score(
                         candidate.lexical_rank,
                         lexical_match.exact,
                         lexical_match.token_coverage,
                         lexical_match.bigram_coverage,
-                    ) * authority,
+                    )
+                });
+                let mut reasons = lexical_match.map_or_else(Vec::new, |mut lexical_match| {
+                    lexical_match.reasons.insert(
+                        0,
+                        if full_scan {
+                            "canonical_full_scan"
+                        } else {
+                            "bm25_rank"
+                        }
+                        .into(),
+                    );
+                    lexical_match.reasons
+                });
+                if semantic_rank.is_some() {
+                    reasons.push("semantic_rank".into());
+                }
+                let score = fused_score(effective_mode, lexical_score, semantic_rank) * authority;
+                memories.push(RecallItem {
+                    subject_ref,
+                    title: memory.title.clone(),
+                    excerpt: truncate(&memory.summary, 360),
+                    origin: RecallOrigin::Memory,
+                    status,
+                    match_reasons: reasons,
+                    score,
                 });
                 if unsafe_text(&text) {
                     cautions.push(format!(
@@ -238,7 +346,7 @@ impl RecallEngine {
             }
         }
         let mut knowledge = Vec::new();
-        let knowledge_candidates = if full_scan {
+        let mut knowledge_candidates = if full_scan {
             self.knowledge_vault
                 .list_current()?
                 .into_iter()
@@ -248,37 +356,74 @@ impl RecallEngine {
                     lexical_rank: index + 1,
                 })
                 .collect()
+        } else if effective_mode == RetrievalMode::Semantic {
+            Vec::new()
         } else {
             self.knowledge_vault
                 .search_ranked_candidates(&terms, knowledge_candidate_limit)?
         };
+        let mut knowledge_ids: BTreeSet<_> = knowledge_candidates
+            .iter()
+            .map(|candidate| candidate.edition.edition_id.clone())
+            .collect();
+        for rank in knowledge_semantic.values() {
+            let Some(edition_id) = rank.subject_ref.strip_prefix("knowledge:") else {
+                continue;
+            };
+            let Ok(edition) = self.knowledge_vault.read(edition_id) else {
+                continue;
+            };
+            if knowledge_ids.insert(edition.edition_id.clone()) {
+                knowledge_candidates.push(RankedEditionCandidate {
+                    edition,
+                    lexical_rank: rank.rank,
+                });
+            }
+        }
         for candidate in knowledge_candidates {
             let edition = candidate.edition;
             let text = knowledge_text(&edition)?;
             let lexical = LexicalDocument::new(&text);
-            if let Some(mut lexical_match) = lexical_match_indexed(&query, &lexical) {
-                lexical_match.reasons.insert(
-                    0,
-                    if full_scan {
-                        "canonical_full_scan"
-                    } else {
-                        "bm25_rank"
-                    }
-                    .into(),
-                );
-                knowledge.push(RecallItem {
-                    subject_ref: format!("knowledge:{}", edition.edition_id),
-                    title: edition.title.clone(),
-                    excerpt: truncate(&strip_frontmatter(&text), 480),
-                    origin: RecallOrigin::Knowledge,
-                    status: "published".into(),
-                    match_reasons: lexical_match.reasons,
-                    score: rank_score(
+            let subject_ref = format!("knowledge:{}", edition.edition_id);
+            let semantic_rank = knowledge_semantic.get(&subject_ref);
+            let lexical_match = lexical_match_indexed(&query, &lexical);
+            let selected = match effective_mode {
+                RetrievalMode::Semantic => semantic_rank.is_some(),
+                RetrievalMode::Hybrid => lexical_match.is_some() || semantic_rank.is_some(),
+                _ => lexical_match.is_some(),
+            };
+            if selected {
+                let lexical_score = lexical_match.as_ref().map(|lexical_match| {
+                    rank_score(
                         candidate.lexical_rank,
                         lexical_match.exact,
                         lexical_match.token_coverage,
                         lexical_match.bigram_coverage,
-                    ) * 1.2,
+                    )
+                });
+                let mut reasons = lexical_match.map_or_else(Vec::new, |mut lexical_match| {
+                    lexical_match.reasons.insert(
+                        0,
+                        if full_scan {
+                            "canonical_full_scan"
+                        } else {
+                            "bm25_rank"
+                        }
+                        .into(),
+                    );
+                    lexical_match.reasons
+                });
+                if semantic_rank.is_some() {
+                    reasons.push("semantic_rank".into());
+                }
+                knowledge.push(RecallItem {
+                    subject_ref,
+                    title: edition.title.clone(),
+                    excerpt: truncate(&strip_frontmatter(&text), 480),
+                    origin: RecallOrigin::Knowledge,
+                    status: "published".into(),
+                    match_reasons: reasons,
+                    score: fused_score(effective_mode, lexical_score, semantic_rank) * 1.2,
                 });
                 if unsafe_text(&text) {
                     cautions.push(format!(
@@ -313,17 +458,18 @@ impl RecallEngine {
             generated_at,
             expires_at: generated_at + Duration::minutes(10),
             persist_policy: "no_automatic_capture".into(),
-            vector_status: "unavailable".into(),
-            requested_mode: request.mode,
-            effective_mode: request.mode,
+            vector_status: vector_status.into(),
+            requested_mode,
+            effective_mode,
             detail: request.detail,
             map_status: "unavailable".into(),
-            candidate_sources: vec![if full_scan {
-                "canonical_full_scan".into()
-            } else {
-                "lexical".into()
-            }],
-            fallback_reason: None,
+            candidate_sources: match effective_mode {
+                RetrievalMode::FullScan => vec!["canonical_full_scan".into()],
+                RetrievalMode::Semantic => vec!["semantic".into()],
+                RetrievalMode::Hybrid => vec!["lexical".into(), "semantic".into()],
+                RetrievalMode::Lexical => vec!["lexical".into()],
+            },
+            fallback_reason,
         })
     }
 
@@ -457,6 +603,25 @@ fn navigation_scope(scope: &MemoryScope) -> (&'static str, &str) {
         MemoryScope::Workspace(key) => ("workspace", key),
         MemoryScope::Machine(key) => ("machine", key),
         MemoryScope::User(key) => ("user", key),
+    }
+}
+
+fn parse_memory_ref(subject_ref: &str) -> Option<(&str, u32)> {
+    let (memory_id, revision) = subject_ref.strip_prefix("memory:")?.split_once('@')?;
+    Some((memory_id, revision.parse().ok()?))
+}
+
+fn fused_score(mode: RetrievalMode, lexical: Option<f64>, semantic: Option<&SemanticRank>) -> f64 {
+    let (semantic_quality, semantic_rrf) = semantic.map_or((0.0, 0.0), |rank| {
+        let similarity = (f64::from(rank.cosine_similarity).clamp(-1.0, 1.0) + 1.0) / 2.0;
+        let reciprocal_rank =
+            1.0 / (60.0 + f64::from(u32::try_from(rank.rank).unwrap_or(u32::MAX)));
+        (similarity + reciprocal_rank, reciprocal_rank)
+    });
+    match mode {
+        RetrievalMode::Semantic => semantic_quality,
+        RetrievalMode::Hybrid => lexical.unwrap_or_default() + semantic_rrf * 0.7,
+        RetrievalMode::Lexical | RetrievalMode::FullScan => lexical.unwrap_or_default(),
     }
 }
 

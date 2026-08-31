@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fs, str::FromStr, sync::Arc};
 
 use art_agent_store::AgentVault;
 use art_domain::{
@@ -10,7 +10,12 @@ use art_domain::{
     },
 };
 use art_knowledge::KnowledgeVault;
-use art_retrieval::{RecallDetail, RecallEngine, RecallOrigin, RecallRequest, RetrievalMode};
+use art_retrieval::{
+    EmbeddingEndpoint, EmbeddingInput, EmbeddingProvider, ProviderFingerprint, RecallDetail,
+    RecallEngine, RecallOrigin, RecallRequest, RetrievalMode, SemanticProjection, SemanticRuntime,
+    knowledge_semantic_documents, knowledge_semantic_path, private_semantic_documents,
+    private_semantic_path,
+};
 use chrono::{Duration, Utc};
 use serde_json::json;
 use tempfile::tempdir;
@@ -31,6 +36,248 @@ fn retrieval_modes_round_trip_as_stable_snake_case() {
         (RetrievalMode::Hybrid, "\"hybrid\""),
     ] {
         assert_eq!(serde_json::to_string(&mode).unwrap(), expected);
+    }
+}
+
+#[derive(Debug)]
+struct SemanticRecallProvider {
+    fingerprint: ProviderFingerprint,
+    fail_query: bool,
+}
+
+impl EmbeddingProvider for SemanticRecallProvider {
+    fn fingerprint(&self) -> ProviderFingerprint {
+        self.fingerprint.clone()
+    }
+
+    fn embed(&self, input: EmbeddingInput<'_>) -> art_domain::ArtResult<Vec<Vec<f32>>> {
+        match input {
+            EmbeddingInput::Query(_) if self.fail_query => {
+                Err(art_domain::ArtError::Internal("synthetic timeout".into()))
+            }
+            EmbeddingInput::Query(_) => Ok(vec![vec![0.0, 1.0, 0.0]]),
+            EmbeddingInput::Documents(documents) => Ok(documents
+                .iter()
+                .map(|document| {
+                    if document.contains("SEMANTIC_TARGET_DOCUMENT") {
+                        vec![0.0, 1.0, 0.0]
+                    } else {
+                        vec![1.0, 0.0, 0.0]
+                    }
+                })
+                .collect()),
+        }
+    }
+}
+
+fn semantic_endpoint(root: &std::path::Path) -> EmbeddingEndpoint {
+    let path = root.join("semantic-endpoint.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&json!({
+            "schema":"art.embedding.endpoint.v1",
+            "protocol":"openai_compatible",
+            "endpoint":"https://embedding.example.test",
+            "model":"test/semantic-recall",
+            "revision":"r1",
+            "dimensions":3,
+            "normalized":true,
+            "timeout_ms":500
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    EmbeddingEndpoint::load(&path).unwrap()
+}
+
+#[test]
+fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent/art.sqlite3"), agent.clone()).unwrap();
+    seed_memory(
+        &private,
+        &agent,
+        "Cold restart procedure",
+        "SEMANTIC_TARGET_DOCUMENT terminate orphan child cleanly",
+        "semantic-target",
+    );
+    seed_memory(
+        &private,
+        &agent,
+        "Exact lexical marker",
+        "ordinary lexical document",
+        "semantic-lexical-exact",
+    );
+    let knowledge_root = root.path().join("knowledge");
+    let knowledge = KnowledgeVault::open(&knowledge_root, [45; 32]).unwrap();
+    let endpoint = semantic_endpoint(root.path());
+    let provider = Arc::new(SemanticRecallProvider {
+        fingerprint: endpoint.fingerprint(),
+        fail_query: false,
+    });
+    let private_path = private_semantic_path(private.path());
+    let knowledge_path = knowledge_semantic_path(&knowledge_root);
+    SemanticProjection::rebuild(
+        &private_path,
+        &endpoint,
+        &private.index_epoch().unwrap(),
+        &private_semantic_documents(&private).unwrap(),
+        provider.as_ref(),
+    )
+    .unwrap();
+    SemanticProjection::rebuild(
+        &knowledge_path,
+        &endpoint,
+        &knowledge.index_epoch().unwrap(),
+        &knowledge_semantic_documents(&knowledge).unwrap(),
+        provider.as_ref(),
+    )
+    .unwrap();
+    let runtime = SemanticRuntime::open(
+        &endpoint,
+        provider,
+        &private_path,
+        &private.index_epoch().unwrap(),
+        &knowledge_path,
+        &knowledge.index_epoch().unwrap(),
+    )
+    .unwrap();
+    let fallback_private = private.clone();
+    let fallback_knowledge = knowledge.clone();
+    let engine = RecallEngine::new(private, knowledge).with_semantic(runtime);
+
+    let bundle = engine
+        .recall(RecallRequest {
+            mode: RetrievalMode::Semantic,
+            max_private_results: Some(1),
+            ..RecallRequest::new("meaning only alias")
+        })
+        .unwrap();
+    assert_eq!(bundle.effective_mode, RetrievalMode::Semantic);
+    assert_eq!(bundle.vector_status, "ready");
+    assert_eq!(bundle.private_memories.len(), 1);
+    assert!(
+        bundle.private_memories[0]
+            .match_reasons
+            .contains(&"semantic_rank".into())
+    );
+    let hybrid = engine
+        .recall(RecallRequest {
+            mode: RetrievalMode::Hybrid,
+            ..RecallRequest::new("Exact lexical marker")
+        })
+        .unwrap();
+    assert_eq!(hybrid.effective_mode, RetrievalMode::Hybrid);
+    assert_eq!(hybrid.private_memories[0].title, "Exact lexical marker");
+
+    let lexical = RecallEngine::new(fallback_private.clone(), fallback_knowledge.clone())
+        .recall(RecallRequest::new("Cold restart procedure"))
+        .unwrap();
+    let failing_provider = Arc::new(SemanticRecallProvider {
+        fingerprint: endpoint.fingerprint(),
+        fail_query: true,
+    });
+    let failing_runtime = SemanticRuntime::open(
+        &endpoint,
+        failing_provider,
+        &private_path,
+        &fallback_private.index_epoch().unwrap(),
+        &knowledge_path,
+        &fallback_knowledge.index_epoch().unwrap(),
+    )
+    .unwrap();
+    let fallback = RecallEngine::new(fallback_private, fallback_knowledge)
+        .with_semantic(failing_runtime)
+        .recall(RecallRequest {
+            mode: RetrievalMode::Hybrid,
+            ..RecallRequest::new("Cold restart procedure")
+        })
+        .unwrap();
+    assert_eq!(fallback.effective_mode, RetrievalMode::Lexical);
+    assert_eq!(fallback.vector_status, "degraded");
+    assert_eq!(
+        fallback.fallback_reason.as_deref(),
+        Some("semantic_provider_failure")
+    );
+    assert_eq!(
+        serde_json::to_value(&fallback.private_memories).unwrap(),
+        serde_json::to_value(&lexical.private_memories).unwrap()
+    );
+}
+
+#[test]
+fn semantic_projection_documents_apply_private_governance_before_embedding() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    seed_memory(
+        &vault,
+        &agent,
+        "Eligible",
+        "eligible semantic body",
+        "semantic-eligible",
+    );
+    let disputed = seed_memory(
+        &vault,
+        &agent,
+        "Disputed",
+        "disputed body must not be embedded",
+        "semantic-disputed",
+    );
+    vault.dispute(&disputed, "conflicting evidence").unwrap();
+
+    let documents = private_semantic_documents(&vault).unwrap();
+    assert_eq!(documents.len(), 1);
+    assert!(!documents[0].text.contains("disputed body"));
+}
+
+#[test]
+fn unconfigured_semantic_modes_fall_back_to_byte_equivalent_lexical_items() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    seed_memory(
+        &vault,
+        &agent,
+        "Lexical fallback marker",
+        "fallback remains exact and deterministic",
+        "fallback-marker",
+    );
+    let engine = RecallEngine::new(
+        vault,
+        KnowledgeVault::open(root.path().join("knowledge"), [44; 32]).unwrap(),
+    );
+    let lexical = engine
+        .recall(RecallRequest::new("Lexical fallback marker"))
+        .unwrap();
+    for mode in [RetrievalMode::Semantic, RetrievalMode::Hybrid] {
+        let fallback = engine
+            .recall(RecallRequest {
+                mode,
+                ..RecallRequest::new("Lexical fallback marker")
+            })
+            .unwrap();
+        assert_eq!(fallback.requested_mode, mode);
+        assert_eq!(fallback.effective_mode, RetrievalMode::Lexical);
+        assert_eq!(fallback.vector_status, "unavailable");
+        assert_eq!(
+            fallback.fallback_reason.as_deref(),
+            Some("semantic_unconfigured")
+        );
+        assert_eq!(
+            serde_json::to_value(&fallback.private_memories).unwrap(),
+            serde_json::to_value(&lexical.private_memories).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&fallback.knowledge_editions).unwrap(),
+            serde_json::to_value(&lexical.knowledge_editions).unwrap()
+        );
     }
 }
 
