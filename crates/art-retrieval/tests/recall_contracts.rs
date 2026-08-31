@@ -34,6 +34,57 @@ fn retrieval_modes_round_trip_as_stable_snake_case() {
     }
 }
 
+#[test]
+fn full_scan_reads_both_canonical_stores_when_lexical_projections_are_empty() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    seed_memory(
+        &vault,
+        &agent,
+        "权威记录仍然存在",
+        "ART_FULL_SCAN_CANONICAL_MARKER",
+        "full-scan-canonical",
+    );
+    rusqlite::Connection::open(vault.path())
+        .unwrap()
+        .execute("DELETE FROM memory_fts", [])
+        .unwrap();
+    let knowledge_root = root.path().join("knowledge");
+    let knowledge = KnowledgeVault::open(&knowledge_root, [41; 32]).unwrap();
+    publish_knowledge(
+        &knowledge,
+        &agent,
+        "full-scan.knowledge",
+        "权威知识仍然存在",
+        "ART_FULL_SCAN_CANONICAL_MARKER",
+    );
+    rusqlite::Connection::open(knowledge_root.join("art-control.sqlite3"))
+        .unwrap()
+        .execute("DELETE FROM knowledge_fts", [])
+        .unwrap();
+    let engine = RecallEngine::new(vault, knowledge);
+
+    let lexical = engine
+        .recall(RecallRequest::new("ART_FULL_SCAN_CANONICAL_MARKER"))
+        .unwrap();
+    assert!(lexical.private_memories.is_empty());
+    assert!(lexical.knowledge_editions.is_empty());
+
+    let full_scan = engine
+        .recall(RecallRequest {
+            mode: RetrievalMode::FullScan,
+            ..RecallRequest::new("ART_FULL_SCAN_CANONICAL_MARKER")
+        })
+        .unwrap();
+    assert_eq!(full_scan.private_memories.len(), 1);
+    assert_eq!(full_scan.knowledge_editions.len(), 1);
+    assert_eq!(full_scan.requested_mode, RetrievalMode::FullScan);
+    assert_eq!(full_scan.effective_mode, RetrievalMode::FullScan);
+    assert_eq!(full_scan.candidate_sources, ["canonical_full_scan"]);
+    assert!(full_scan.fallback_reason.is_none());
+}
+
 fn seed_memory(vault: &AgentVault, agent: &AgentId, title: &str, text: &str, key: &str) -> String {
     let mut memory = MemoryArtifact::new(
         agent.clone(),
@@ -440,18 +491,26 @@ fn expired_and_disputed_memories_are_filtered_before_ranking() {
         replacement_vault,
         KnowledgeVault::open(root.path().join("knowledge"), [6; 32]).unwrap(),
     );
-    assert!(
-        engine
-            .recall(RecallRequest::new("ART_EXPIRED_EXACT_555"))
-            .unwrap()
-            .private_memories
-            .is_empty()
-    );
-    assert!(
-        engine
-            .recall(RecallRequest::new("ART_DISPUTED_EXACT_556"))
-            .unwrap()
-            .private_memories
-            .is_empty()
-    );
+    for mode in [RetrievalMode::Lexical, RetrievalMode::FullScan] {
+        assert!(
+            engine
+                .recall(RecallRequest {
+                    mode,
+                    ..RecallRequest::new("ART_EXPIRED_EXACT_555")
+                })
+                .unwrap()
+                .private_memories
+                .is_empty()
+        );
+        assert!(
+            engine
+                .recall(RecallRequest {
+                    mode,
+                    ..RecallRequest::new("ART_DISPUTED_EXACT_556")
+                })
+                .unwrap()
+                .private_memories
+                .is_empty()
+        );
+    }
 }

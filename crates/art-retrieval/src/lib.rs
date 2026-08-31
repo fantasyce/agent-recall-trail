@@ -7,12 +7,12 @@ pub use policy::{RecallDetail, RetrievalMode};
 
 use std::{cmp::Ordering, collections::BTreeSet, fs, sync::OnceLock};
 
-use art_agent_store::AgentVault;
+use art_agent_store::{AgentVault, RankedMemoryCandidate};
 use art_domain::{
     ArtError, ArtResult,
     memory::{MemoryArtifact, MemoryStatus},
 };
-use art_knowledge::{EditionRecord, KnowledgeVault};
+use art_knowledge::{EditionRecord, KnowledgeVault, RankedEditionCandidate};
 use chrono::{DateTime, Duration, Utc};
 use jieba_rs::{Jieba, TokenizeMode};
 use serde::{Deserialize, Serialize};
@@ -152,10 +152,22 @@ impl RecallEngine {
         let now = Utc::now();
         let mut memories = Vec::new();
         let mut cautions = Vec::new();
-        for candidate in self
-            .private_vault
-            .search_ranked_candidates(&terms, private_candidate_limit)?
-        {
+        let full_scan = request.mode == RetrievalMode::FullScan;
+        let private_candidates = if full_scan {
+            self.private_vault
+                .list()?
+                .into_iter()
+                .enumerate()
+                .map(|(index, artifact)| RankedMemoryCandidate {
+                    artifact,
+                    lexical_rank: index + 1,
+                })
+                .collect()
+        } else {
+            self.private_vault
+                .search_ranked_candidates(&terms, private_candidate_limit)?
+        };
+        for candidate in private_candidates {
             let memory = candidate.artifact;
             let text = memory_text(&memory);
             let lexical = LexicalDocument::new(&text);
@@ -177,7 +189,15 @@ impl RecallEngine {
                 } else {
                     1.0
                 };
-                lexical_match.reasons.insert(0, "bm25_rank".into());
+                lexical_match.reasons.insert(
+                    0,
+                    if full_scan {
+                        "canonical_full_scan"
+                    } else {
+                        "bm25_rank"
+                    }
+                    .into(),
+                );
                 memories.push(RecallItem {
                     subject_ref: format!("memory:{}@{}", memory.id, memory.current_revision),
                     title: memory.title.clone(),
@@ -201,15 +221,34 @@ impl RecallEngine {
             }
         }
         let mut knowledge = Vec::new();
-        for candidate in self
-            .knowledge_vault
-            .search_ranked_candidates(&terms, knowledge_candidate_limit)?
-        {
+        let knowledge_candidates = if full_scan {
+            self.knowledge_vault
+                .list_current()?
+                .into_iter()
+                .enumerate()
+                .map(|(index, edition)| RankedEditionCandidate {
+                    edition,
+                    lexical_rank: index + 1,
+                })
+                .collect()
+        } else {
+            self.knowledge_vault
+                .search_ranked_candidates(&terms, knowledge_candidate_limit)?
+        };
+        for candidate in knowledge_candidates {
             let edition = candidate.edition;
             let text = knowledge_text(&edition)?;
             let lexical = LexicalDocument::new(&text);
             if let Some(mut lexical_match) = lexical_match_indexed(&query, &lexical) {
-                lexical_match.reasons.insert(0, "bm25_rank".into());
+                lexical_match.reasons.insert(
+                    0,
+                    if full_scan {
+                        "canonical_full_scan"
+                    } else {
+                        "bm25_rank"
+                    }
+                    .into(),
+                );
                 knowledge.push(RecallItem {
                     subject_ref: format!("knowledge:{}", edition.edition_id),
                     title: edition.title.clone(),
@@ -261,7 +300,11 @@ impl RecallEngine {
             effective_mode: request.mode,
             detail: request.detail,
             map_status: "unavailable".into(),
-            candidate_sources: vec!["lexical".into()],
+            candidate_sources: vec![if full_scan {
+                "canonical_full_scan".into()
+            } else {
+                "lexical".into()
+            }],
             fallback_reason: None,
         })
     }
