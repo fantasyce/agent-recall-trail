@@ -1,6 +1,6 @@
 # ART Progressive Recall and Memory-Knowledge Architecture
 
-**Status:** Draft for operator review
+**Status:** Approved by the operator on 2026-08-31
 
 **Target release:** ART 0.3.0
 
