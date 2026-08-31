@@ -1,9 +1,14 @@
 //! Admission-gated Chinese lexical retrieval and Recall Bundles.
 
+mod embedding;
 mod navigation;
 mod policy;
 mod ranking;
 
+pub use embedding::{
+    EmbeddingEndpoint, EmbeddingInput, EmbeddingProvider, OpenAiCompatibleEmbeddingProvider,
+    ProviderFingerprint,
+};
 pub use navigation::NavigationTopic;
 pub use policy::{RecallDetail, RetrievalMode};
 

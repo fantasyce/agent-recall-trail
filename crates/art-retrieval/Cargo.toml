@@ -12,6 +12,8 @@ art-knowledge = { path = "../art-knowledge" }
 chrono.workspace = true
 jieba-rs.workspace = true
 regex.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -22,7 +24,6 @@ unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-rusqlite.workspace = true
 
 [lints]
 workspace = true
