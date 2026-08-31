@@ -18,7 +18,7 @@ use art_knowledge::{
     backup::{create_backup, restore_backup, verify_backup},
 };
 use art_mcp::{ArtMcpServer, run_stdio_server};
-use art_retrieval::{RecallEngine, RecallRequest};
+use art_retrieval::{RecallDetail, RecallEngine, RecallRequest, RetrievalMode};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -90,6 +90,10 @@ enum Command {
         query: String,
         #[arg(long)]
         agent: String,
+        #[arg(long, value_enum, default_value_t = RetrievalModeArg::Lexical)]
+        mode: RetrievalModeArg,
+        #[arg(long, value_enum, default_value_t = RecallDetailArg::Recall)]
+        detail: RecallDetailArg,
         #[arg(long)]
         json: bool,
         #[arg(long, default_value_t = 1800)]
@@ -177,6 +181,40 @@ enum AgentCommand {
 enum HostArg {
     Codex,
     Dsh,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RetrievalModeArg {
+    Lexical,
+    FullScan,
+    Semantic,
+    Hybrid,
+}
+
+impl From<RetrievalModeArg> for RetrievalMode {
+    fn from(value: RetrievalModeArg) -> Self {
+        match value {
+            RetrievalModeArg::Lexical => Self::Lexical,
+            RetrievalModeArg::FullScan => Self::FullScan,
+            RetrievalModeArg::Semantic => Self::Semantic,
+            RetrievalModeArg::Hybrid => Self::Hybrid,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RecallDetailArg {
+    Route,
+    Recall,
+}
+
+impl From<RecallDetailArg> for RecallDetail {
+    fn from(value: RecallDetailArg) -> Self {
+        match value {
+            RecallDetailArg::Route => Self::Route,
+            RecallDetailArg::Recall => Self::Recall,
+        }
+    }
 }
 impl From<HostArg> for HostKind {
     fn from(value: HostArg) -> Self {
@@ -452,6 +490,8 @@ async fn run(cli: Cli) -> ArtResult<()> {
         Command::Recall {
             query,
             agent,
+            mode,
+            detail,
             json: _,
             budget_tokens,
             include_candidates,
@@ -461,6 +501,8 @@ async fn run(cli: Cli) -> ArtResult<()> {
             let (vault, knowledge) = runtime(&paths, &agent)?;
             print_json(&RecallEngine::new(vault, knowledge).recall(RecallRequest {
                 query,
+                mode: mode.into(),
+                detail: detail.into(),
                 include_candidates,
                 budget_tokens,
                 max_private_results,

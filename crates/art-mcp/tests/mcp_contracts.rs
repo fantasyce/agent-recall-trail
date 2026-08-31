@@ -8,6 +8,7 @@ use art_mcp::{
     ArtMcpServer, FeedbackInput, HealthInput, KnowledgeProposeInput, MemoryCaptureInput, ReadInput,
     RecallInput, SourceAnchorInput,
 };
+use art_retrieval::{RecallDetail, RetrievalMode};
 use rmcp::handler::server::wrapper::Parameters;
 use rusqlite::Connection;
 use serde_json::json;
@@ -75,6 +76,28 @@ fn recall_result_depth_is_optional_and_bounded_in_the_tool_schema() {
                 .is_some_and(|required| required.iter().any(|value| value == field))
         );
     }
+    let properties = &recall["inputSchema"]["properties"];
+    let enum_values = |property: &serde_json::Value| {
+        property.get("enum").cloned().unwrap_or_else(|| {
+            let pointer = property["$ref"]
+                .as_str()
+                .and_then(|reference| reference.strip_prefix('#'))
+                .expect("enum property must be inline or reference a local schema");
+            recall["inputSchema"]
+                .pointer(pointer)
+                .and_then(|definition| definition.get("enum"))
+                .cloned()
+                .expect("referenced schema must define enum values")
+        })
+    };
+    assert_eq!(
+        enum_values(&properties["mode"]),
+        json!(["lexical", "full_scan", "semantic", "hybrid"])
+    );
+    assert_eq!(
+        enum_values(&properties["detail"]),
+        json!(["route", "recall"])
+    );
 }
 
 #[tokio::test]
@@ -83,6 +106,8 @@ async fn recall_result_depth_is_forwarded_to_validation() {
     let result = server
         .art_recall(Parameters(RecallInput {
             query: "marker".into(),
+            mode: RetrievalMode::Lexical,
+            detail: RecallDetail::Recall,
             include_candidates: false,
             budget_tokens: 1_800,
             max_private_results: None,
@@ -141,6 +166,8 @@ async fn capture_then_recall_stays_bound_to_process_identity() {
     let recalled = server
         .art_recall(Parameters(RecallInput {
             query: "EOF 关闭子进程".into(),
+            mode: RetrievalMode::Lexical,
+            detail: RecallDetail::Recall,
             include_candidates: false,
             budget_tokens: 1800,
             max_private_results: None,

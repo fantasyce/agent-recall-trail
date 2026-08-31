@@ -196,6 +196,7 @@ dependencies = [
  "jieba-rs",
  "regex",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "sha2",

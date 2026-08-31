@@ -46,6 +46,8 @@ fn recall_result_depth_flags_are_exposed_and_validated() {
     let help = String::from_utf8(help_output.stdout).unwrap();
     assert!(help.contains("--max-private-results"));
     assert!(help.contains("--max-knowledge-results"));
+    assert!(help.contains("--mode"));
+    assert!(help.contains("--detail"));
 
     let root = tempdir().unwrap();
     let home = root.path().to_str().unwrap();

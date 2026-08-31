@@ -1,6 +1,9 @@
 //! Admission-gated Chinese lexical retrieval and Recall Bundles.
 
+mod policy;
 mod ranking;
+
+pub use policy::{RecallDetail, RetrievalMode};
 
 use std::{cmp::Ordering, collections::BTreeSet, fs, sync::OnceLock};
 
@@ -55,11 +58,21 @@ pub struct RecallBundle {
     pub expires_at: DateTime<Utc>,
     pub persist_policy: String,
     pub vector_status: String,
+    pub requested_mode: RetrievalMode,
+    pub effective_mode: RetrievalMode,
+    pub detail: RecallDetail,
+    pub map_status: String,
+    pub candidate_sources: Vec<String>,
+    pub fallback_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecallRequest {
     pub query: String,
+    #[serde(default)]
+    pub mode: RetrievalMode,
+    #[serde(default)]
+    pub detail: RecallDetail,
     pub include_candidates: bool,
     pub budget_tokens: usize,
     pub max_private_results: Option<usize>,
@@ -70,6 +83,8 @@ impl RecallRequest {
     pub fn new(query: impl Into<String>) -> Self {
         Self {
             query: query.into(),
+            mode: RetrievalMode::Lexical,
+            detail: RecallDetail::Recall,
             include_candidates: false,
             budget_tokens: 1_800,
             max_private_results: None,
@@ -242,6 +257,12 @@ impl RecallEngine {
             expires_at: generated_at + Duration::minutes(10),
             persist_policy: "no_automatic_capture".into(),
             vector_status: "unavailable".into(),
+            requested_mode: request.mode,
+            effective_mode: request.mode,
+            detail: request.detail,
+            map_status: "unavailable".into(),
+            candidate_sources: vec!["lexical".into()],
+            fallback_reason: None,
         })
     }
 }

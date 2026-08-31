@@ -10,10 +10,29 @@ use art_domain::{
     },
 };
 use art_knowledge::KnowledgeVault;
-use art_retrieval::{RecallEngine, RecallOrigin, RecallRequest};
+use art_retrieval::{RecallDetail, RecallEngine, RecallOrigin, RecallRequest, RetrievalMode};
 use chrono::{Duration, Utc};
 use serde_json::json;
 use tempfile::tempdir;
+
+#[test]
+fn recall_defaults_preserve_v020_lexical_behavior() {
+    let request = RecallRequest::new("thunderbolt recovery");
+    assert_eq!(request.mode, RetrievalMode::Lexical);
+    assert_eq!(request.detail, RecallDetail::Recall);
+}
+
+#[test]
+fn retrieval_modes_round_trip_as_stable_snake_case() {
+    for (mode, expected) in [
+        (RetrievalMode::Lexical, "\"lexical\""),
+        (RetrievalMode::FullScan, "\"full_scan\""),
+        (RetrievalMode::Semantic, "\"semantic\""),
+        (RetrievalMode::Hybrid, "\"hybrid\""),
+    ] {
+        assert_eq!(serde_json::to_string(&mode).unwrap(), expected);
+    }
+}
 
 fn seed_memory(vault: &AgentVault, agent: &AgentId, title: &str, text: &str, key: &str) -> String {
     let mut memory = MemoryArtifact::new(

@@ -18,7 +18,7 @@ use art_domain::{
     memory::{MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity},
 };
 use art_knowledge::KnowledgeVault;
-use art_retrieval::{RecallEngine, RecallRequest};
+use art_retrieval::{RecallDetail, RecallEngine, RecallRequest, RetrievalMode};
 use chrono::Utc;
 use rmcp::{
     Json, ServerHandler, ServiceExt,
@@ -32,6 +32,10 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RecallInput {
     pub query: String,
+    #[serde(default)]
+    pub mode: RetrievalMode,
+    #[serde(default)]
+    pub detail: RecallDetail,
     #[serde(default)]
     pub include_candidates: bool,
     #[serde(default = "default_budget")]
@@ -198,6 +202,8 @@ impl ArtMcpServer {
             .recall_engine
             .recall(RecallRequest {
                 query: input.query,
+                mode: input.mode,
+                detail: input.detail,
                 include_candidates: input.include_candidates,
                 budget_tokens: input.budget_tokens,
                 max_private_results: input.max_private_results,
