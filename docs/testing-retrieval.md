@@ -40,7 +40,14 @@ Release gates:
 | SciFact | >= 0.76 | >= 0.64 | >= 0.4375 | < 350 ms |
 | NFCorpus | >= 0.14 | >= 0.29 | >= 0.2226 | < 350 ms |
 
-These thresholds qualify ART's stable default product path. An operator may run a paired semantic or hybrid evaluation for a selected endpoint, but the resulting quality belongs to that model, revision, dimensions, corpus construction, and endpoint configuration. ART does not advertise provider quality as product quality.
+These thresholds qualify ART's stable default product path. An operator may run
+the Python harness directly with `--mode semantic` or `--mode hybrid`, an
+owner-only `--embedding-config`, and the endpoint's lowercase SHA-256
+`--provider-fingerprint`. The harness rebuilds task-owned projections and binds
+the fingerprint into its output. Run lexical and the selected optional mode
+against the same fixture for a paired comparison. The resulting quality belongs
+to that model, revision, dimensions, corpus construction, and endpoint
+configuration; ART does not advertise provider quality as product quality.
 
 The checked-in repository contains only the harness, checksums, metric
 definitions, and aggregate acceptance evidence. Do not add the archives,

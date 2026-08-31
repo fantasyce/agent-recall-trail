@@ -47,7 +47,7 @@ ART keeps five logical layers with distinct authority:
 
 The intended flow is `route -> recall -> read`. Route output contains topics, counts, and safe references—not memory or knowledge bodies. Recall returns bounded excerpts with diagnostics. Read resolves one exact admitted reference from the canonical store.
 
-The user selects `lexical`, `full_scan`, `semantic`, or `hybrid` per request. Full scan traverses every governance-eligible canonical record after lane admission. Semantic modes never become active merely because a configuration file exists; they require an explicit request and current provider-bound projections. Any provider, network, dimension, or projection failure falls back to the same lexical result path with a safe status and reason.
+The user selects `lexical`, `full_scan`, `semantic`, or `hybrid` per request. Full scan traverses every governance-eligible canonical record after lane admission. Every bounded mode applies identity, lifecycle, validity, current-Edition, and revocation admission before its candidate window is truncated. Navigation and semantic projections are re-admitted against a current canonical snapshot on every request; epoch, provider, or projection replacement drift fails closed to a canonical or lexical fallback. Semantic modes never become active merely because a configuration file exists; they require an explicit request and current provider-bound projections. Any provider, network, dimension, or projection failure falls back to the same lexical result path with a safe status and reason. Hybrid fusion uses an owner-configurable, versioned policy rather than a model-specific weight in the recall core.
 
 ## Deferred by design
 

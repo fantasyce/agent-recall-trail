@@ -1,5 +1,7 @@
 # ART v0.3.0: progressive recall with user-selected retrieval
 
+Status: prepared launch copy; publish only after the v0.3.0 release and acceptance gates are public.
+
 Coding Agents need continuity, but private experience and shared knowledge do not have the same authority. ART gives each Agent a physically separate private Recall Trail, then allows stable material to cross the boundary only as a human-reviewed, immutable Knowledge Edition.
 
 ART is not a transcript store, prompt injector, cloud memory service, or autonomous publisher. It is a local Rust runtime for Codex and DSH with six bounded MCP tools. Agents can recall, capture, read, give feedback, and draft proposals; only a human operator can approve or publish shared knowledge.

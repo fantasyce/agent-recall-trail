@@ -13,6 +13,7 @@ pub use embedding::{
 };
 pub use navigation::NavigationTopic;
 pub use policy::{RecallDetail, RetrievalMode};
+pub use ranking::RankFusionPolicy;
 pub use semantic::{
     SemanticRanks, SemanticRuntime, knowledge_semantic_documents, private_semantic_documents,
 };
@@ -123,6 +124,7 @@ pub struct RecallEngine {
     semantic: Option<SemanticRuntime>,
     semantic_unavailable_status: String,
     semantic_unavailable_reason: String,
+    rank_fusion_policy: RankFusionPolicy,
 }
 
 #[derive(Debug)]
@@ -155,6 +157,7 @@ impl RecallEngine {
             semantic: None,
             semantic_unavailable_status: "unavailable".into(),
             semantic_unavailable_reason: "semantic_unconfigured".into(),
+            rank_fusion_policy: RankFusionPolicy::default(),
         }
     }
 
@@ -175,12 +178,28 @@ impl RecallEngine {
         self
     }
 
+    pub fn with_rank_fusion_policy(mut self, policy: RankFusionPolicy) -> ArtResult<Self> {
+        policy.validate()?;
+        self.rank_fusion_policy = policy;
+        Ok(self)
+    }
+
     pub fn vector_status(&self) -> &str {
-        if self.semantic.is_some() {
-            "ready"
-        } else {
-            &self.semantic_unavailable_status
+        match self.semantic.as_ref() {
+            Some(runtime) => match self.semantic_epochs_match(runtime) {
+                Ok(true) => "ready",
+                Ok(false) => "stale",
+                Err(_) => "degraded",
+            },
+            None => &self.semantic_unavailable_status,
         }
+    }
+
+    fn semantic_epochs_match(&self, runtime: &SemanticRuntime) -> ArtResult<bool> {
+        Ok(runtime.source_epochs_match(
+            &self.private_vault.index_epoch()?,
+            &self.knowledge_vault.index_epoch()?,
+        ))
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -203,12 +222,26 @@ impl RecallEngine {
         }
         let requested_mode = request.mode;
         let (mut effective_mode, mut vector_status, mut fallback_reason) = match request.mode {
-            RetrievalMode::Semantic | RetrievalMode::Hybrid if self.semantic.is_none() => (
-                RetrievalMode::Lexical,
-                self.semantic_unavailable_status.as_str(),
-                Some(self.semantic_unavailable_reason.clone()),
-            ),
-            RetrievalMode::Semantic | RetrievalMode::Hybrid => (request.mode, "ready", None),
+            RetrievalMode::Semantic | RetrievalMode::Hybrid => match self.semantic.as_ref() {
+                None => (
+                    RetrievalMode::Lexical,
+                    self.semantic_unavailable_status.as_str(),
+                    Some(self.semantic_unavailable_reason.clone()),
+                ),
+                Some(runtime) => match self.semantic_epochs_match(runtime) {
+                    Ok(true) => (request.mode, "ready", None),
+                    Ok(false) => (
+                        RetrievalMode::Lexical,
+                        "stale",
+                        Some("semantic_projection_stale".into()),
+                    ),
+                    Err(_) => (
+                        RetrievalMode::Lexical,
+                        "degraded",
+                        Some("semantic_epoch_unavailable".into()),
+                    ),
+                },
+            },
             _ => (request.mode, "unavailable", None),
         };
         let terms = query.search_terms();
@@ -216,21 +249,54 @@ impl RecallEngine {
         let knowledge_requested = request.max_knowledge_results.unwrap_or(3);
         let private_candidate_limit = (private_requested * 64).clamp(512, 2_048);
         let knowledge_candidate_limit = (knowledge_requested * 64).clamp(512, 2_048);
+        let now = Utc::now();
+        let (private_admitted, knowledge_admitted) = if matches!(
+            effective_mode,
+            RetrievalMode::Semantic | RetrievalMode::Hybrid
+        ) {
+            (
+                self.private_vault
+                    .list()?
+                    .into_iter()
+                    .filter(|memory| eligible_memory(memory, false, now))
+                    .map(|memory| format!("memory:{}@{}", memory.id, memory.current_revision))
+                    .collect(),
+                self.knowledge_vault
+                    .list_current()?
+                    .into_iter()
+                    .map(|edition| format!("knowledge:{}", edition.edition_id))
+                    .collect(),
+            )
+        } else {
+            (BTreeSet::new(), BTreeSet::new())
+        };
         let semantic_ranks = if matches!(
             effective_mode,
             RetrievalMode::Semantic | RetrievalMode::Hybrid
         ) {
-            if let Ok(ranks) = self
-                .semantic
-                .as_ref()
-                .expect("semantic runtime checked")
-                .rank(
-                    &request.query,
-                    private_candidate_limit,
-                    knowledge_candidate_limit,
-                )
-            {
-                Some(ranks)
+            let runtime = self.semantic.as_ref().expect("semantic runtime checked");
+            if let Ok(ranks) = runtime.rank(
+                &request.query,
+                private_candidate_limit,
+                knowledge_candidate_limit,
+                &private_admitted,
+                &knowledge_admitted,
+            ) {
+                match self.semantic_epochs_match(runtime) {
+                    Ok(true) => Some(ranks),
+                    Ok(false) => {
+                        effective_mode = RetrievalMode::Lexical;
+                        vector_status = "stale";
+                        fallback_reason = Some("semantic_projection_stale".into());
+                        None
+                    }
+                    Err(_) => {
+                        effective_mode = RetrievalMode::Lexical;
+                        vector_status = "degraded";
+                        fallback_reason = Some("semantic_epoch_unavailable".into());
+                        None
+                    }
+                }
             } else {
                 effective_mode = RetrievalMode::Lexical;
                 vector_status = "degraded";
@@ -260,7 +326,6 @@ impl RecallEngine {
                     .collect()
             })
             .unwrap_or_default();
-        let now = Utc::now();
         let mut memories = Vec::new();
         let mut cautions = Vec::new();
         let full_scan = effective_mode == RetrievalMode::FullScan;
@@ -277,8 +342,12 @@ impl RecallEngine {
         } else if effective_mode == RetrievalMode::Semantic {
             Vec::new()
         } else {
-            self.private_vault
-                .search_ranked_candidates(&terms, private_candidate_limit)?
+            self.private_vault.search_ranked_eligible_candidates(
+                &terms,
+                private_candidate_limit,
+                request.include_candidates,
+                now,
+            )?
         };
         let mut private_ids: BTreeSet<_> = private_candidates
             .iter()
@@ -351,7 +420,12 @@ impl RecallEngine {
                 if semantic_rank.is_some() {
                     reasons.push("semantic_rank".into());
                 }
-                let score = fused_score(effective_mode, lexical_score, semantic_rank) * authority;
+                let score = fused_score(
+                    effective_mode,
+                    lexical_score,
+                    semantic_rank,
+                    &self.rank_fusion_policy,
+                ) * authority;
                 memories.push(RecallItem {
                     subject_ref,
                     title: memory.title.clone(),
@@ -386,6 +460,14 @@ impl RecallEngine {
             self.knowledge_vault
                 .search_ranked_candidates(&terms, knowledge_candidate_limit)?
         };
+        let current_knowledge: BTreeMap<_, _> = self
+            .knowledge_vault
+            .list_current()?
+            .into_iter()
+            .map(|edition| (edition.edition_id.clone(), edition))
+            .collect();
+        knowledge_candidates
+            .retain(|candidate| current_knowledge.contains_key(&candidate.edition.edition_id));
         let mut knowledge_ids: BTreeSet<_> = knowledge_candidates
             .iter()
             .map(|candidate| candidate.edition.edition_id.clone())
@@ -394,7 +476,7 @@ impl RecallEngine {
             let Some(edition_id) = rank.subject_ref.strip_prefix("knowledge:") else {
                 continue;
             };
-            let Ok(edition) = self.knowledge_vault.read(edition_id) else {
+            let Some(edition) = current_knowledge.get(edition_id).cloned() else {
                 continue;
             };
             if knowledge_ids.insert(edition.edition_id.clone()) {
@@ -447,7 +529,12 @@ impl RecallEngine {
                     origin: RecallOrigin::Knowledge,
                     status: "published".into(),
                     match_reasons: reasons,
-                    score: fused_score(effective_mode, lexical_score, semantic_rank) * 1.2,
+                    score: fused_score(
+                        effective_mode,
+                        lexical_score,
+                        semantic_rank,
+                        &self.rank_fusion_policy,
+                    ) * 1.2,
                 });
                 if unsafe_text(&text) {
                     cautions.push(format!(
@@ -499,52 +586,38 @@ impl RecallEngine {
 
     fn route(&self, request: &RecallRequest) -> ArtResult<RecallBundle> {
         let mut map_status = "ready".to_owned();
-        let private_entries = match self.private_vault.navigation_aligned() {
-            Ok(true) => self.private_vault.navigation_entries(),
-            Ok(false) | Err(_) => self
-                .private_vault
+        let private_entries = self.projected_private_navigation_candidates().or_else(|_| {
+            self.private_vault
                 .rebuild_navigation()
-                .and_then(|_| self.private_vault.navigation_entries()),
-        };
-        let knowledge_entries = match self.knowledge_vault.navigation_aligned() {
-            Ok(true) => self.knowledge_vault.navigation_entries(),
-            Ok(false) | Err(_) => self
-                .knowledge_vault
-                .rebuild_navigation()
-                .and_then(|_| self.knowledge_vault.navigation_entries()),
-        };
+                .and_then(|_| self.projected_private_navigation_candidates())
+        });
+        let knowledge_entries = self
+            .projected_knowledge_navigation_candidates()
+            .or_else(|_| {
+                self.knowledge_vault
+                    .rebuild_navigation()
+                    .and_then(|_| self.projected_knowledge_navigation_candidates())
+            });
         let mut candidates = Vec::new();
+        let mut candidate_sources = Vec::new();
+        let mut used_fallback = false;
         if let Ok(entries) = private_entries {
-            candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
-                lane: "private_memory".into(),
-                topic_key: format!("{}:{}", entry.scope_type, entry.scope_key),
-                searchable_metadata: format!(
-                    "{} {} {} {}",
-                    entry.title, entry.kind, entry.scope_type, entry.scope_key
-                ),
-                subject_ref: format!("memory:{}@{}", entry.memory_id, entry.revision),
-                title: entry.title,
-                usage_count: entry.usage_count,
-            }));
+            candidates.extend(entries);
+            candidate_sources.push("private_navigation".into());
         } else {
             map_status = "degraded".into();
+            used_fallback = true;
             candidates.extend(self.canonical_private_navigation_candidates()?);
+            candidate_sources.push("private_canonical".into());
         }
         if let Ok(entries) = knowledge_entries {
-            candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
-                lane: "shared_knowledge".into(),
-                topic_key: entry.knowledge_key.clone(),
-                searchable_metadata: format!(
-                    "{} {} {}",
-                    entry.title, entry.knowledge_key, entry.applicability
-                ),
-                subject_ref: format!("knowledge:{}", entry.edition_id),
-                title: entry.title,
-                usage_count: entry.usage_count,
-            }));
+            candidates.extend(entries);
+            candidate_sources.push("shared_navigation".into());
         } else {
             map_status = "degraded".into();
+            used_fallback = true;
             candidates.extend(self.canonical_knowledge_navigation_candidates()?);
+            candidate_sources.push("shared_canonical".into());
         }
         let generated_at = Utc::now();
         Ok(RecallBundle {
@@ -567,9 +640,104 @@ impl RecallEngine {
             effective_mode: request.mode,
             detail: RecallDetail::Route,
             map_status,
-            candidate_sources: vec!["private_navigation".into(), "shared_navigation".into()],
-            fallback_reason: None,
+            candidate_sources,
+            fallback_reason: used_fallback.then(|| "navigation_projection_fallback".into()),
         })
+    }
+
+    fn projected_private_navigation_candidates(&self) -> ArtResult<Vec<NavigationCandidate>> {
+        let entries = self.private_vault.navigation_entries()?;
+        let epoch_before = self.private_vault.index_epoch()?;
+        let now = Utc::now();
+        let records = self.private_vault.list()?;
+        let epoch_after = self.private_vault.index_epoch()?;
+        let projected_ids: BTreeSet<_> = entries
+            .iter()
+            .map(|entry| entry.memory_id.as_str())
+            .collect();
+        let expected_ids: BTreeSet<_> = records
+            .iter()
+            .filter(|memory| memory.status == MemoryStatus::Active)
+            .map(|memory| memory.id.as_str())
+            .collect();
+        if epoch_before != epoch_after
+            || projected_ids != expected_ids
+            || entries
+                .iter()
+                .any(|entry| entry.source_epoch != epoch_after)
+        {
+            return Err(ArtError::IndexDegraded);
+        }
+        let current: BTreeMap<_, _> = records
+            .into_iter()
+            .filter(|memory| eligible_memory(memory, false, now))
+            .map(|memory| (memory.id.clone(), memory))
+            .collect();
+        Ok(entries
+            .into_iter()
+            .filter_map(|entry| {
+                let memory = current.get(&entry.memory_id)?;
+                (memory.current_revision == entry.revision).then(|| {
+                    let (scope_type, scope_key) = navigation_scope(&memory.scope);
+                    NavigationCandidate {
+                        lane: "private_memory".into(),
+                        topic_key: format!("{scope_type}:{scope_key}"),
+                        searchable_metadata: format!(
+                            "{} {} {scope_type} {scope_key}",
+                            memory.title,
+                            memory.payload.kind_name()
+                        ),
+                        subject_ref: format!("memory:{}@{}", memory.id, memory.current_revision),
+                        title: memory.title.clone(),
+                        usage_count: entry.usage_count,
+                    }
+                })
+            })
+            .collect())
+    }
+
+    fn projected_knowledge_navigation_candidates(&self) -> ArtResult<Vec<NavigationCandidate>> {
+        let entries = self.knowledge_vault.navigation_entries()?;
+        let epoch_before = self.knowledge_vault.index_epoch()?;
+        let records = self.knowledge_vault.list_current()?;
+        let epoch_after = self.knowledge_vault.index_epoch()?;
+        let projected_ids: BTreeSet<_> = entries
+            .iter()
+            .map(|entry| entry.edition_id.as_str())
+            .collect();
+        let expected_ids: BTreeSet<_> = records
+            .iter()
+            .map(|edition| edition.edition_id.as_str())
+            .collect();
+        if epoch_before != epoch_after
+            || projected_ids != expected_ids
+            || entries
+                .iter()
+                .any(|entry| entry.source_epoch != epoch_after)
+        {
+            return Err(ArtError::IndexDegraded);
+        }
+        let current: BTreeMap<_, _> = records
+            .into_iter()
+            .map(|edition| (edition.edition_id.clone(), edition))
+            .collect();
+        Ok(entries
+            .into_iter()
+            .filter_map(|entry| {
+                let edition = current.get(&entry.edition_id)?;
+                Some(NavigationCandidate {
+                    lane: "shared_knowledge".into(),
+                    topic_key: edition.knowledge_key.clone(),
+                    searchable_metadata: format!(
+                        "{} {} {}",
+                        edition.title, edition.knowledge_key, entry.applicability
+                    ),
+                    subject_ref: format!("knowledge:{}", edition.edition_id),
+                    title: edition.title.clone(),
+                    usage_count: entry.usage_count,
+                })
+            })
+            .collect())
     }
 
     fn canonical_private_navigation_candidates(&self) -> ArtResult<Vec<NavigationCandidate>> {
@@ -598,19 +766,25 @@ impl RecallEngine {
     }
 
     fn canonical_knowledge_navigation_candidates(&self) -> ArtResult<Vec<NavigationCandidate>> {
-        Ok(self
-            .knowledge_vault
+        self.knowledge_vault
             .list_current()?
             .into_iter()
-            .map(|edition| NavigationCandidate {
-                lane: "shared_knowledge".into(),
-                topic_key: edition.knowledge_key.clone(),
-                searchable_metadata: format!("{} {}", edition.title, edition.knowledge_key),
-                subject_ref: format!("knowledge:{}", edition.edition_id),
-                title: edition.title,
-                usage_count: 0,
+            .map(|edition| {
+                let text = knowledge_text(&edition)?;
+                let applicability = markdown_section(&text, "Applicability").unwrap_or_default();
+                Ok(NavigationCandidate {
+                    lane: "shared_knowledge".into(),
+                    topic_key: edition.knowledge_key.clone(),
+                    searchable_metadata: format!(
+                        "{} {} {}",
+                        edition.title, edition.knowledge_key, applicability
+                    ),
+                    subject_ref: format!("knowledge:{}", edition.edition_id),
+                    title: edition.title,
+                    usage_count: 0,
+                })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -629,16 +803,24 @@ fn parse_memory_ref(subject_ref: &str) -> Option<(&str, u32)> {
     Some((memory_id, revision.parse().ok()?))
 }
 
-fn fused_score(mode: RetrievalMode, lexical: Option<f64>, semantic: Option<&SemanticRank>) -> f64 {
+fn fused_score(
+    mode: RetrievalMode,
+    lexical: Option<f64>,
+    semantic: Option<&SemanticRank>,
+    policy: &RankFusionPolicy,
+) -> f64 {
     let (semantic_quality, semantic_rrf) = semantic.map_or((0.0, 0.0), |rank| {
         let similarity = f64::midpoint(f64::from(rank.cosine_similarity).clamp(-1.0, 1.0), 1.0);
-        let reciprocal_rank =
-            1.0 / (60.0 + f64::from(u32::try_from(rank.rank).unwrap_or(u32::MAX)));
+        let reciprocal_rank = 1.0
+            / (f64::from(policy.rrf_k) + f64::from(u32::try_from(rank.rank).unwrap_or(u32::MAX)));
         (similarity + reciprocal_rank, reciprocal_rank)
     });
     match mode {
         RetrievalMode::Semantic => semantic_quality,
-        RetrievalMode::Hybrid => lexical.unwrap_or_default() + semantic_rrf * 0.7,
+        RetrievalMode::Hybrid => {
+            lexical.unwrap_or_default() * policy.lexical_weight
+                + semantic_rrf * policy.semantic_weight
+        }
         RetrievalMode::Lexical | RetrievalMode::FullScan => lexical.unwrap_or_default(),
     }
 }
@@ -662,6 +844,18 @@ fn memory_text(memory: &MemoryArtifact) -> String {
 
 fn knowledge_text(edition: &EditionRecord) -> ArtResult<String> {
     fs::read_to_string(&edition.markdown_path).map_err(|error| ArtError::Io(error.to_string()))
+}
+
+fn markdown_section(value: &str, heading: &str) -> Option<String> {
+    let marker = format!("## {heading}");
+    let (_, tail) = value.split_once(&marker)?;
+    Some(
+        tail.split("\n## ")
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_owned(),
+    )
 }
 
 fn normalize(value: &str) -> String {

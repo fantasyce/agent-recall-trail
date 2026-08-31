@@ -11,7 +11,7 @@ use art_domain::{
     anchor::{AnchorKind, AssuranceDecision, AssuranceOutcome, SourceAnchor, anchor_set_hash},
     memory::{MemoryArtifact, MemoryStatus, Sensitivity},
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
@@ -437,15 +437,10 @@ impl AgentVault {
 
     pub fn rebuild_navigation(&self) -> ArtResult<u64> {
         let source_epoch = self.index_epoch()?;
-        let now = Utc::now();
         let eligible: Vec<_> = self
             .list()?
             .into_iter()
-            .filter(|memory| {
-                memory.status == MemoryStatus::Active
-                    && memory.valid_from.is_none_or(|start| start <= now)
-                    && memory.valid_until.is_none_or(|end| end > now)
-            })
+            .filter(|memory| memory.status == MemoryStatus::Active)
             .collect();
         let mut connection = open_connection(&self.path)?;
         let transaction = connection
@@ -569,6 +564,49 @@ impl AgentVault {
             .query_map(params![expression, self.agent_id.as_str(), limit], |row| {
                 row.get::<_, String>(0)
             })
+            .map_err(map_db)?;
+        rows.enumerate()
+            .map(|(index, row)| {
+                let artifact = serde_json::from_str(&row.map_err(map_db)?)
+                    .map_err(|error| ArtError::Internal(error.to_string()))?;
+                Ok(RankedMemoryCandidate {
+                    artifact,
+                    lexical_rank: index + 1,
+                })
+            })
+            .collect()
+    }
+
+    pub fn search_ranked_eligible_candidates(
+        &self,
+        terms: &[String],
+        limit: usize,
+        include_candidates: bool,
+        now: DateTime<Utc>,
+    ) -> ArtResult<Vec<RankedMemoryCandidate>> {
+        if !(1..=2_048).contains(&limit) {
+            return Err(ArtError::InvalidInput(
+                "candidate limit must be 1..=2048".into(),
+            ));
+        }
+        let connection = open_connection(&self.path)?;
+        let expression = fts_expression(terms)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT a.artifact_json FROM memory_fts f JOIN memory_artifacts a ON a.id=f.memory_id WHERE memory_fts MATCH ?1 AND a.agent_id=?2 AND (a.status='active' OR (?3 AND a.status='candidate')) AND (a.valid_from IS NULL OR a.valid_from<=?4) AND (a.valid_until IS NULL OR a.valid_until>?4) ORDER BY rank,a.updated_at DESC,a.id ASC LIMIT ?5",
+            )
+            .map_err(map_db)?;
+        let rows = statement
+            .query_map(
+                params![
+                    expression,
+                    self.agent_id.as_str(),
+                    include_candidates,
+                    now.to_rfc3339(),
+                    limit
+                ],
+                |row| row.get::<_, String>(0),
+            )
             .map_err(map_db)?;
         rows.enumerate()
             .map(|(index, row)| {

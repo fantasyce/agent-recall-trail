@@ -1,7 +1,9 @@
 use std::{
     fs,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
+    thread,
+    time::Duration,
 };
 
 use art_domain::{ArtError, ArtResult};
@@ -24,14 +26,18 @@ fn private_file(path: &Path, body: &[u8]) {
 }
 
 fn endpoint(root: &Path) -> EmbeddingEndpoint {
-    let config = root.join("endpoint.json");
+    endpoint_named(root, "endpoint.json", "test/model")
+}
+
+fn endpoint_named(root: &Path, filename: &str, model: &str) -> EmbeddingEndpoint {
+    let config = root.join(filename);
     private_file(
         &config,
         serde_json::to_vec(&json!({
             "schema":"art.embedding.endpoint.v1",
             "protocol":"openai_compatible",
             "endpoint":"https://embedding.example.test",
-            "model":"test/model",
+            "model":model,
             "revision":"r1",
             "dimensions":3,
             "normalized":true,
@@ -41,6 +47,33 @@ fn endpoint(root: &Path) -> EmbeddingEndpoint {
         .as_slice(),
     );
     EmbeddingEndpoint::load(&config).unwrap()
+}
+
+#[derive(Debug)]
+struct BlockingProvider {
+    fingerprint: ProviderFingerprint,
+    state: Arc<(Mutex<(bool, bool)>, Condvar)>,
+}
+
+impl EmbeddingProvider for BlockingProvider {
+    fn fingerprint(&self) -> ProviderFingerprint {
+        self.fingerprint.clone()
+    }
+
+    fn embed(&self, input: EmbeddingInput<'_>) -> ArtResult<Vec<Vec<f32>>> {
+        let texts = match input {
+            EmbeddingInput::Query(query) => vec![query.to_owned()],
+            EmbeddingInput::Documents(documents) => documents.to_vec(),
+        };
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap();
+        state.0 = true;
+        changed.notify_all();
+        while !state.1 {
+            state = changed.wait(state).unwrap();
+        }
+        Ok(texts.into_iter().map(|_| vec![1.0, 0.0, 0.0]).collect())
+    }
 }
 
 #[derive(Debug)]
@@ -145,6 +178,101 @@ fn semantic_projection_is_lane_local_private_epoch_bound_and_ranked() {
             0o600
         );
     }
+}
+
+#[test]
+fn opened_projection_rejects_atomic_replacement_from_another_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("semantic.sqlite3");
+    let first_endpoint = endpoint_named(root.path(), "first.json", "test/model-a");
+    let first_provider = FakeProvider {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail_after: None,
+        fingerprint: first_endpoint.fingerprint(),
+    };
+    SemanticProjection::rebuild(
+        &path,
+        &first_endpoint,
+        "epoch-a",
+        &documents(2),
+        &first_provider,
+    )
+    .unwrap();
+    let opened = SemanticProjection::open(&path, &first_endpoint, "epoch-a").unwrap();
+
+    let second_endpoint = endpoint_named(root.path(), "second.json", "test/model-b");
+    let second_provider = FakeProvider {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail_after: None,
+        fingerprint: second_endpoint.fingerprint(),
+    };
+    SemanticProjection::rebuild(
+        &path,
+        &second_endpoint,
+        "epoch-b",
+        &documents(2),
+        &second_provider,
+    )
+    .unwrap();
+
+    assert!(opened.rank(&[1.0, 0.0, 0.0], 2).is_err());
+}
+
+#[test]
+fn concurrent_rebuild_is_rejected_without_destroying_the_active_checkpoint() {
+    let root = tempfile::tempdir().unwrap();
+    let endpoint = endpoint(root.path());
+    let path = root.path().join("semantic.sqlite3");
+    let state = Arc::new((Mutex::new((false, false)), Condvar::new()));
+    let first_provider = BlockingProvider {
+        fingerprint: endpoint.fingerprint(),
+        state: state.clone(),
+    };
+    let first_path = path.clone();
+    let first_endpoint = endpoint.clone();
+    let first = thread::spawn(move || {
+        SemanticProjection::rebuild(
+            &first_path,
+            &first_endpoint,
+            "epoch-first",
+            &documents(2),
+            &first_provider,
+        )
+    });
+
+    let (shared, changed) = &*state;
+    let entered = shared.lock().unwrap();
+    let (mut entered, timeout) = changed
+        .wait_timeout_while(entered, Duration::from_secs(5), |state| !state.0)
+        .unwrap();
+    assert!(
+        !timeout.timed_out(),
+        "first rebuild never reached embedding"
+    );
+    drop(entered);
+
+    let second_provider = FakeProvider {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail_after: None,
+        fingerprint: endpoint.fingerprint(),
+    };
+    assert!(
+        SemanticProjection::rebuild(
+            &path,
+            &endpoint,
+            "epoch-second",
+            &documents(2),
+            &second_provider,
+        )
+        .is_err()
+    );
+
+    entered = shared.lock().unwrap();
+    entered.1 = true;
+    changed.notify_all();
+    drop(entered);
+    assert_eq!(first.join().unwrap().unwrap(), 2);
+    assert!(SemanticProjection::open(&path, &endpoint, "epoch-first").is_ok());
 }
 
 #[test]

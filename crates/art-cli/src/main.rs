@@ -20,8 +20,8 @@ use art_knowledge::{
 };
 use art_mcp::{ArtMcpServer, run_stdio_server};
 use art_retrieval::{
-    EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RecallDetail, RecallEngine,
-    RecallRequest, RetrievalMode, SemanticProjection, SemanticRuntime,
+    EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RankFusionPolicy, RecallDetail,
+    RecallEngine, RecallRequest, RetrievalMode, SemanticProjection, SemanticRuntime,
     knowledge_semantic_documents, knowledge_semantic_path, private_semantic_documents,
     private_semantic_path,
 };
@@ -1392,27 +1392,33 @@ fn configured_recall_engine(
 ) -> RecallEngine {
     let engine = RecallEngine::new(private.clone(), knowledge.clone());
     let config = paths.root().join("config/art/embedding/default.json");
+    let engine = configured_semantic(paths, private, knowledge, engine, &config);
+    configured_rank_fusion(paths, engine)
+}
+
+fn configured_semantic(
+    paths: &ArtPaths,
+    private: &AgentVault,
+    knowledge: &KnowledgeVault,
+    engine: RecallEngine,
+    config: &Path,
+) -> RecallEngine {
     if !config.exists() {
         return engine;
     }
-    let Ok(endpoint) = EmbeddingEndpoint::load(&config) else {
+    let Ok(endpoint) = EmbeddingEndpoint::load(config) else {
         return engine.with_semantic_unavailable("degraded", "semantic_configuration_invalid");
     };
-    let provider = match OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) {
-        Ok(provider) => Arc::new(provider),
-        Err(_) => {
-            return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
-        }
+    let Ok(provider) = OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) else {
+        return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
     };
-    let Ok(private_epoch) = private.index_epoch() else {
-        return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
-    };
-    let Ok(knowledge_epoch) = knowledge.index_epoch() else {
+    let (Ok(private_epoch), Ok(knowledge_epoch)) = (private.index_epoch(), knowledge.index_epoch())
+    else {
         return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
     };
     match SemanticRuntime::open(
         &endpoint,
-        provider,
+        Arc::new(provider),
         &private_semantic_path(private.path()),
         &private_epoch,
         &knowledge_semantic_path(&paths.knowledge_vault()),
@@ -1420,6 +1426,22 @@ fn configured_recall_engine(
     ) {
         Ok(runtime) => engine.with_semantic(runtime),
         Err(_) => engine.with_semantic_unavailable("stale", "semantic_projection_unavailable"),
+    }
+}
+
+fn configured_rank_fusion(paths: &ArtPaths, engine: RecallEngine) -> RecallEngine {
+    let config = paths.root().join("config/art/retrieval/fusion.json");
+    if !config.exists() {
+        return engine;
+    }
+    match RankFusionPolicy::load(&config) {
+        Ok(policy) => match engine.clone().with_rank_fusion_policy(policy) {
+            Ok(configured) => configured,
+            Err(_) => {
+                engine.with_semantic_unavailable("degraded", "rank_fusion_configuration_invalid")
+            }
+        },
+        Err(_) => engine.with_semantic_unavailable("degraded", "rank_fusion_configuration_invalid"),
     }
 }
 fn identity_and_key(paths: &ArtPaths, agent: &str) -> ArtResult<(AgentId, [u8; 32])> {

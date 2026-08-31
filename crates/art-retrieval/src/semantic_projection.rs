@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use art_domain::{ArtError, ArtResult};
@@ -66,6 +67,8 @@ pub struct SemanticRebuildProgress {
 pub struct SemanticProjection {
     path: PathBuf,
     dimensions: usize,
+    provider_fingerprint: String,
+    source_epoch: String,
 }
 
 pub fn private_semantic_path(agent_vault: &Path) -> PathBuf {
@@ -115,6 +118,7 @@ impl SemanticProjection {
         })?;
         fs::create_dir_all(parent).map_err(safe_io)?;
         set_private_directory(parent)?;
+        let _rebuild_lock = acquire_rebuild_lock(path)?;
         let staging = path.with_extension("sqlite3.staging");
         let build_fingerprint = build_fingerprint(endpoint, source_epoch, documents);
         let expected: BTreeMap<_, _> = documents
@@ -221,40 +225,49 @@ impl SemanticProjection {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(db_error)?;
-        let value = |key: &str| -> ArtResult<String> {
-            connection
-                .query_row("SELECT value FROM metadata WHERE key=?1", [key], |row| {
-                    row.get(0)
-                })
-                .map_err(db_error)
-        };
         let fingerprint = endpoint.fingerprint();
-        if value("schema_version")? != SCHEMA_VERSION
-            || value("provider_fingerprint")? != fingerprint.value
-            || value("dimensions")? != endpoint.dimensions().to_string()
-            || value("source_epoch")? != expected_epoch
-            || value("build_status")? != "complete"
-        {
-            return Err(ArtError::IndexDegraded);
-        }
+        validate_projection_metadata(
+            &connection,
+            &fingerprint.value,
+            endpoint.dimensions(),
+            expected_epoch,
+        )?;
         Ok(Self {
             path: path.to_owned(),
             dimensions: endpoint.dimensions(),
+            provider_fingerprint: fingerprint.value,
+            source_epoch: expected_epoch.to_owned(),
         })
     }
 
     pub fn rank(&self, query: &[f32], limit: usize) -> ArtResult<Vec<SemanticRank>> {
+        self.rank_admitted(query, limit, None)
+    }
+
+    pub fn rank_admitted(
+        &self,
+        query: &[f32],
+        limit: usize,
+        admitted: Option<&BTreeSet<String>>,
+    ) -> ArtResult<Vec<SemanticRank>> {
         if !(1..=2_048).contains(&limit) {
             return Err(ArtError::InvalidInput(
                 "semantic rank limit must be 1..=2048".into(),
             ));
         }
         let query = normalize_checked(query.to_vec(), self.dimensions)?;
+        validate_private_projection(&self.path)?;
         let connection = Connection::open_with_flags(
             &self.path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(db_error)?;
+        validate_projection_metadata(
+            &connection,
+            &self.provider_fingerprint,
+            self.dimensions,
+            &self.source_epoch,
+        )?;
         let mut statement = connection
             .prepare("SELECT subject_ref,vector FROM vectors ORDER BY subject_ref")
             .map_err(db_error)?;
@@ -266,6 +279,9 @@ impl SemanticProjection {
         let mut scored = Vec::new();
         for row in rows {
             let (subject_ref, bytes) = row.map_err(db_error)?;
+            if admitted.is_some_and(|subjects| !subjects.contains(&subject_ref)) {
+                continue;
+            }
             let vector = decode_vector(&bytes, self.dimensions)?;
             let score: f32 = query
                 .iter()
@@ -292,6 +308,41 @@ impl SemanticProjection {
             })
             .collect())
     }
+}
+
+fn acquire_rebuild_lock(path: &Path) -> ArtResult<Connection> {
+    let lock_path = path.with_extension("sqlite3.lock");
+    let connection = Connection::open(&lock_path).map_err(db_error)?;
+    set_private_file(&lock_path)?;
+    connection.busy_timeout(Duration::ZERO).map_err(db_error)?;
+    connection
+        .execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE")
+        .map_err(db_error)?;
+    Ok(connection)
+}
+
+fn validate_projection_metadata(
+    connection: &Connection,
+    provider_fingerprint: &str,
+    dimensions: usize,
+    source_epoch: &str,
+) -> ArtResult<()> {
+    let value = |key: &str| -> ArtResult<String> {
+        connection
+            .query_row("SELECT value FROM metadata WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .map_err(db_error)
+    };
+    if value("schema_version")? != SCHEMA_VERSION
+        || value("provider_fingerprint")? != provider_fingerprint
+        || value("dimensions")? != dimensions.to_string()
+        || value("source_epoch")? != source_epoch
+        || value("build_status")? != "complete"
+    {
+        return Err(ArtError::IndexDegraded);
+    }
+    Ok(())
 }
 
 fn create_staging(

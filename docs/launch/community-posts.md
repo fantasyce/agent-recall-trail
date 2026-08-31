@@ -1,5 +1,7 @@
 # Community launch copy
 
+Status: prepared launch copy; publish only after the v0.3.0 release and acceptance gates are public.
+
 ## Short post
 
 ART v0.3.0 is open source: private Recall Trails for each coding Agent, plus human-reviewed shared Knowledge Editions. It adds progressive route/recall/read and user-selected lexical, full-scan, optional semantic, or hybrid retrieval. Local Rust runtime for Codex + DSH; no bundled model, cloud account, or autonomous publication. https://github.com/fantasyce/agent-recall-trail/releases/tag/v0.3.0

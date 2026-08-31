@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 import sqlite3
 import statistics
 import subprocess
@@ -97,7 +98,14 @@ def aggregate(rankings: dict[str, list[str]], qrels: dict[str, dict[str, int]]) 
     return result
 
 
-def create_fixture(art: Path, dataset: str, source: Path, work: Path) -> tuple[Path, dict[str, str]]:
+def create_fixture(
+    art: Path,
+    dataset: str,
+    source: Path,
+    work: Path,
+    mode: str,
+    embedding_config: Path | None,
+) -> tuple[Path, dict[str, str]]:
     home = work / f"home-{dataset}"
     run([str(art), "init", "--confirm", "--home", str(home)])
     run(
@@ -168,15 +176,44 @@ def create_fixture(art: Path, dataset: str, source: Path, work: Path) -> tuple[P
         connection.commit()
     finally:
         connection.close()
+    if mode in {"semantic", "hybrid"}:
+        if embedding_config is None:
+            raise SystemExit("semantic and hybrid evaluation require --embedding-config")
+        target = home / "config" / "art" / "embedding" / "default.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(embedding_config, target)
+        target.chmod(0o600)
+        run(
+            [
+                str(art),
+                "--home",
+                str(home),
+                "reindex",
+                "--agent",
+                "benchmark-agent",
+                "--knowledge",
+                "--vectors",
+            ]
+        )
     return home, edition_to_document
 
 
-def evaluate_dataset(art: Path, dataset: str, source: Path, work: Path) -> dict:
+def evaluate_dataset(
+    art: Path,
+    dataset: str,
+    source: Path,
+    work: Path,
+    mode: str,
+    embedding_config: Path | None,
+    provider_fingerprint: str | None,
+) -> dict:
     qrels = load_qrels(source / "qrels" / "test.tsv")
     all_queries = {
         str(row["_id"]): row["text"] for row in load_jsonl(source / "queries.jsonl")
     }
-    home, edition_to_document = create_fixture(art, dataset, source, work)
+    home, edition_to_document = create_fixture(
+        art, dataset, source, work, mode, embedding_config
+    )
     rankings = {}
     latencies = []
     vector_statuses = set()
@@ -192,7 +229,7 @@ def evaluate_dataset(art: Path, dataset: str, source: Path, work: Path) -> dict:
                     "--agent",
                     "benchmark-agent",
                     "--mode",
-                    "lexical",
+                    mode,
                     "--json",
                     "--budget-tokens",
                     "6000",
@@ -218,6 +255,8 @@ def evaluate_dataset(art: Path, dataset: str, source: Path, work: Path) -> dict:
     )
     return {
         "dataset": dataset,
+        "mode": mode,
+        "provider_fingerprint": provider_fingerprint,
         "corpus_documents": len(edition_to_document),
         "test_queries": len(qrels),
         "relevance_judgments": sum(len(values) for values in qrels.values()),
@@ -238,9 +277,24 @@ def main() -> None:
     parser.add_argument("--art", required=True, type=Path)
     parser.add_argument("--datasets", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--mode",
+        choices=("lexical", "full_scan", "semantic", "hybrid"),
+        default="lexical",
+    )
+    parser.add_argument("--embedding-config", type=Path)
+    parser.add_argument("--provider-fingerprint")
     args = parser.parse_args()
     if not args.art.is_file() or not args.datasets.is_dir() or args.output.exists():
         raise SystemExit("ART binary and dataset root must exist; output must be new")
+    if args.mode in {"semantic", "hybrid"}:
+        if args.embedding_config is None or not args.embedding_config.is_file():
+            raise SystemExit("semantic and hybrid evaluation require --embedding-config")
+        fingerprint = args.provider_fingerprint or ""
+        if len(fingerprint) != 64 or any(value not in "0123456789abcdef" for value in fingerprint):
+            raise SystemExit("semantic and hybrid evaluation require a lowercase SHA-256 --provider-fingerprint")
+    elif args.embedding_config is not None or args.provider_fingerprint is not None:
+        raise SystemExit("embedding qualification arguments require semantic or hybrid mode")
     for dataset in GATES:
         for relative in ("corpus.jsonl", "queries.jsonl", "qrels/test.tsv"):
             if not (args.datasets / dataset / relative).is_file():
@@ -248,12 +302,25 @@ def main() -> None:
     started = time.time()
     with tempfile.TemporaryDirectory(prefix="art-beir-release-gate-") as directory:
         results = [
-            evaluate_dataset(args.art, dataset, args.datasets / dataset, Path(directory))
+            evaluate_dataset(
+                args.art,
+                dataset,
+                args.datasets / dataset,
+                Path(directory),
+                args.mode,
+                args.embedding_config,
+                args.provider_fingerprint,
+            )
             for dataset in GATES
         ]
     payload = {
         "schema": "art.beir.retrieval-gate.v1",
         "art_version": run([str(args.art), "--version"]).strip(),
+        "mode": args.mode,
+        "qualification_scope": (
+            "art_default" if args.mode == "lexical" else "provider_specific"
+        ),
+        "provider_fingerprint": args.provider_fingerprint,
         "datasets": results,
         "elapsed_seconds": round(time.time() - started, 3),
         "passed": all(result["passed"] for result in results),

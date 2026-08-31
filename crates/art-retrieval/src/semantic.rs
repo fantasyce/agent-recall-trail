@@ -1,9 +1,8 @@
-use std::{fs, path::Path, sync::Arc};
+use std::{collections::BTreeSet, fs, path::Path, sync::Arc};
 
 use art_agent_store::AgentVault;
 use art_domain::{ArtResult, memory::MemoryStatus};
 use art_knowledge::KnowledgeVault;
-use chrono::Utc;
 
 use crate::{
     EmbeddingEndpoint, EmbeddingInput, EmbeddingProvider, SemanticDocument, SemanticProjection,
@@ -21,6 +20,8 @@ pub struct SemanticRuntime {
     provider: Arc<dyn EmbeddingProvider>,
     private: SemanticProjection,
     knowledge: SemanticProjection,
+    private_epoch: String,
+    knowledge_epoch: String,
 }
 
 impl SemanticRuntime {
@@ -42,7 +43,13 @@ impl SemanticRuntime {
             provider,
             private: SemanticProjection::open(private_path, endpoint, private_epoch)?,
             knowledge: SemanticProjection::open(knowledge_path, endpoint, knowledge_epoch)?,
+            private_epoch: private_epoch.to_owned(),
+            knowledge_epoch: knowledge_epoch.to_owned(),
         })
+    }
+
+    pub fn source_epochs_match(&self, private_epoch: &str, knowledge_epoch: &str) -> bool {
+        self.private_epoch == private_epoch && self.knowledge_epoch == knowledge_epoch
     }
 
     pub fn rank(
@@ -50,26 +57,29 @@ impl SemanticRuntime {
         query: &str,
         private_limit: usize,
         knowledge_limit: usize,
+        private_admitted: &BTreeSet<String>,
+        knowledge_admitted: &BTreeSet<String>,
     ) -> ArtResult<SemanticRanks> {
         let vectors = self.provider.embed(EmbeddingInput::Query(query))?;
         let query = vectors.first().ok_or(art_domain::ArtError::IndexDegraded)?;
         Ok(SemanticRanks {
-            private: self.private.rank(query, private_limit)?,
-            knowledge: self.knowledge.rank(query, knowledge_limit)?,
+            private: self
+                .private
+                .rank_admitted(query, private_limit, Some(private_admitted))?,
+            knowledge: self.knowledge.rank_admitted(
+                query,
+                knowledge_limit,
+                Some(knowledge_admitted),
+            )?,
         })
     }
 }
 
 pub fn private_semantic_documents(vault: &AgentVault) -> ArtResult<Vec<SemanticDocument>> {
-    let now = Utc::now();
     vault
         .list()?
         .into_iter()
-        .filter(|memory| {
-            memory.status == MemoryStatus::Active
-                && memory.valid_from.is_none_or(|start| start <= now)
-                && memory.valid_until.is_none_or(|end| end > now)
-        })
+        .filter(|memory| memory.status == MemoryStatus::Active)
         .map(|memory| {
             SemanticDocument::new(
                 format!("memory:{}@{}", memory.id, memory.current_revision),

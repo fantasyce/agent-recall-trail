@@ -11,10 +11,10 @@ use art_domain::{
 };
 use art_knowledge::KnowledgeVault;
 use art_retrieval::{
-    EmbeddingEndpoint, EmbeddingInput, EmbeddingProvider, ProviderFingerprint, RecallDetail,
-    RecallEngine, RecallOrigin, RecallRequest, RetrievalMode, SemanticProjection, SemanticRuntime,
-    knowledge_semantic_documents, knowledge_semantic_path, private_semantic_documents,
-    private_semantic_path,
+    EmbeddingEndpoint, EmbeddingInput, EmbeddingProvider, ProviderFingerprint, RankFusionPolicy,
+    RecallDetail, RecallEngine, RecallOrigin, RecallRequest, RetrievalMode, SemanticProjection,
+    SemanticRuntime, knowledge_semantic_documents, knowledge_semantic_path,
+    private_semantic_documents, private_semantic_path,
 };
 use chrono::{Duration, Utc};
 use serde_json::json;
@@ -37,6 +37,38 @@ fn retrieval_modes_round_trip_as_stable_snake_case() {
     ] {
         assert_eq!(serde_json::to_string(&mode).unwrap(), expected);
     }
+}
+
+#[test]
+fn versioned_rank_fusion_policy_loads_from_an_owner_only_file() {
+    let root = tempdir().unwrap();
+    let path = root.path().join("fusion.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&json!({
+            "version":"art.rank-fusion.v1",
+            "lexical_weight":0.9,
+            "semantic_weight":1.1,
+            "rrf_k":42
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let policy = RankFusionPolicy::load(&path).unwrap();
+    assert_eq!(policy.version, "art.rank-fusion.v1");
+    assert_eq!(policy.rrf_k, 42);
+
+    fs::write(
+        &path,
+        br#"{"version":"art.rank-fusion.v1","lexical_weight":-1.0,"semantic_weight":1.0,"rrf_k":42}"#,
+    )
+    .unwrap();
+    assert!(RankFusionPolicy::load(&path).is_err());
 }
 
 #[derive(Debug)]
@@ -150,6 +182,9 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
     .unwrap();
     let fallback_private = private.clone();
     let fallback_knowledge = knowledge.clone();
+    let configurable_private = private.clone();
+    let configurable_knowledge = knowledge.clone();
+    let configurable_runtime = runtime.clone();
     let engine = RecallEngine::new(private, knowledge).with_semantic(runtime);
 
     let bundle = engine
@@ -175,6 +210,24 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
         .unwrap();
     assert_eq!(hybrid.effective_mode, RetrievalMode::Hybrid);
     assert_eq!(hybrid.private_memories[0].title, "Exact lexical marker");
+    let semantic_first = RecallEngine::new(configurable_private, configurable_knowledge)
+        .with_semantic(configurable_runtime)
+        .with_rank_fusion_policy(RankFusionPolicy {
+            version: "art.rank-fusion.v1".into(),
+            lexical_weight: 0.0,
+            semantic_weight: 10.0,
+            rrf_k: 1,
+        })
+        .unwrap()
+        .recall(RecallRequest {
+            mode: RetrievalMode::Hybrid,
+            ..RecallRequest::new("Exact lexical marker")
+        })
+        .unwrap();
+    assert_eq!(
+        semantic_first.private_memories[0].title,
+        "Cold restart procedure"
+    );
 
     let lexical = RecallEngine::new(fallback_private.clone(), fallback_knowledge.clone())
         .recall(RecallRequest::new("Cold restart procedure"))
@@ -212,6 +265,99 @@ fn configured_semantic_mode_recalls_meaning_without_lexical_overlap() {
 }
 
 #[test]
+fn long_running_semantic_runtime_falls_back_when_canonical_epochs_change() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent/art.sqlite3"), agent.clone()).unwrap();
+    let knowledge_root = root.path().join("knowledge");
+    let knowledge = KnowledgeVault::open(&knowledge_root, [47; 32]).unwrap();
+    let superseded = publish_knowledge_version(
+        &knowledge,
+        &agent,
+        "runtime.epoch",
+        "Superseded semantic edition",
+        "SEMANTIC_TARGET_DOCUMENT obsolete procedure",
+        "runtime-epoch-v1",
+    );
+    let endpoint = semantic_endpoint(root.path());
+    let provider = Arc::new(SemanticRecallProvider {
+        fingerprint: endpoint.fingerprint(),
+        fail_query: false,
+    });
+    let private_path = private_semantic_path(private.path());
+    let knowledge_path = knowledge_semantic_path(&knowledge_root);
+    SemanticProjection::rebuild(
+        &private_path,
+        &endpoint,
+        &private.index_epoch().unwrap(),
+        &private_semantic_documents(&private).unwrap(),
+        provider.as_ref(),
+    )
+    .unwrap();
+    SemanticProjection::rebuild(
+        &knowledge_path,
+        &endpoint,
+        &knowledge.index_epoch().unwrap(),
+        &knowledge_semantic_documents(&knowledge).unwrap(),
+        provider.as_ref(),
+    )
+    .unwrap();
+    let runtime = SemanticRuntime::open(
+        &endpoint,
+        provider,
+        &private_path,
+        &private.index_epoch().unwrap(),
+        &knowledge_path,
+        &knowledge.index_epoch().unwrap(),
+    )
+    .unwrap();
+    let lexical_private = private.clone();
+    let lexical_knowledge = knowledge.clone();
+    let engine = RecallEngine::new(private, knowledge.clone()).with_semantic(runtime);
+
+    let replacement = publish_knowledge_version(
+        &knowledge,
+        &agent,
+        "runtime.epoch",
+        "Current replacement edition",
+        "ART_CURRENT_REPLACEMENT_MARKER",
+        "runtime-epoch-v2",
+    );
+    let lexical = RecallEngine::new(lexical_private, lexical_knowledge)
+        .recall(RecallRequest::new("ART_CURRENT_REPLACEMENT_MARKER"))
+        .unwrap();
+    assert_eq!(lexical.knowledge_editions.len(), 1);
+    assert_eq!(
+        lexical.knowledge_editions[0].subject_ref,
+        format!("knowledge:{replacement}")
+    );
+
+    let stale = engine
+        .recall(RecallRequest {
+            mode: RetrievalMode::Hybrid,
+            ..RecallRequest::new("ART_CURRENT_REPLACEMENT_MARKER")
+        })
+        .unwrap();
+    assert_eq!(stale.effective_mode, RetrievalMode::Lexical);
+    assert_eq!(stale.vector_status, "stale");
+    assert_eq!(
+        stale.fallback_reason.as_deref(),
+        Some("semantic_projection_stale")
+    );
+    assert_eq!(engine.vector_status(), "stale");
+    assert_eq!(
+        serde_json::to_value(&stale.knowledge_editions).unwrap(),
+        serde_json::to_value(&lexical.knowledge_editions).unwrap()
+    );
+    assert!(
+        stale
+            .knowledge_editions
+            .iter()
+            .all(|item| item.subject_ref != format!("knowledge:{superseded}"))
+    );
+}
+
+#[test]
 fn semantic_projection_documents_apply_private_governance_before_embedding() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();
@@ -235,6 +381,72 @@ fn semantic_projection_documents_apply_private_governance_before_embedding() {
     let documents = private_semantic_documents(&vault).unwrap();
     assert_eq!(documents.len(), 1);
     assert!(!documents[0].text.contains("disputed body"));
+}
+
+#[test]
+fn future_valid_private_memory_becomes_semantically_recallable_without_reindex() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent/art.sqlite3"), agent.clone()).unwrap();
+    let memory_id = seed_memory_with_validity(
+        &private,
+        &agent,
+        "Future semantic procedure",
+        "SEMANTIC_TARGET_DOCUMENT FUTURE_SEMANTIC_MARKER",
+        "future-semantic",
+        Some(Utc::now() + Duration::seconds(1)),
+        None,
+    );
+    let knowledge_root = root.path().join("knowledge");
+    let knowledge = KnowledgeVault::open(&knowledge_root, [48; 32]).unwrap();
+    let endpoint = semantic_endpoint(root.path());
+    let provider = Arc::new(SemanticRecallProvider {
+        fingerprint: endpoint.fingerprint(),
+        fail_query: false,
+    });
+    let private_path = private_semantic_path(private.path());
+    let knowledge_path = knowledge_semantic_path(&knowledge_root);
+    SemanticProjection::rebuild(
+        &private_path,
+        &endpoint,
+        &private.index_epoch().unwrap(),
+        &private_semantic_documents(&private).unwrap(),
+        provider.as_ref(),
+    )
+    .unwrap();
+    SemanticProjection::rebuild(
+        &knowledge_path,
+        &endpoint,
+        &knowledge.index_epoch().unwrap(),
+        &knowledge_semantic_documents(&knowledge).unwrap(),
+        provider.as_ref(),
+    )
+    .unwrap();
+    let runtime = SemanticRuntime::open(
+        &endpoint,
+        provider,
+        &private_path,
+        &private.index_epoch().unwrap(),
+        &knowledge_path,
+        &knowledge.index_epoch().unwrap(),
+    )
+    .unwrap();
+    let engine = RecallEngine::new(private, knowledge).with_semantic(runtime);
+
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    let recalled = engine
+        .recall(RecallRequest {
+            mode: RetrievalMode::Semantic,
+            max_private_results: Some(1),
+            ..RecallRequest::new("meaning only alias")
+        })
+        .unwrap();
+    assert_eq!(recalled.vector_status, "ready");
+    assert_eq!(recalled.private_memories.len(), 1);
+    assert_eq!(
+        recalled.private_memories[0].subject_ref,
+        format!("memory:{memory_id}@1")
+    );
 }
 
 #[test]
@@ -279,6 +491,44 @@ fn unconfigured_semantic_modes_fall_back_to_byte_equivalent_lexical_items() {
             serde_json::to_value(&lexical.knowledge_editions).unwrap()
         );
     }
+}
+
+#[test]
+fn lexical_admission_happens_before_the_bounded_rank_window() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    let active = seed_memory(
+        &vault,
+        &agent,
+        "Crowded lexical marker",
+        "ART_ADMISSION_BEFORE_RANK_MARKER",
+        "admission-active",
+    );
+    for index in 0..512 {
+        seed_candidate_memory(
+            &vault,
+            &agent,
+            "Crowded lexical marker",
+            "ART_ADMISSION_BEFORE_RANK_MARKER",
+            &format!("admission-candidate-{index}"),
+        );
+    }
+    let engine = RecallEngine::new(
+        vault,
+        KnowledgeVault::open(root.path().join("knowledge"), [49; 32]).unwrap(),
+    );
+    let recalled = engine
+        .recall(RecallRequest {
+            max_private_results: Some(1),
+            ..RecallRequest::new("ART_ADMISSION_BEFORE_RANK_MARKER")
+        })
+        .unwrap();
+    assert_eq!(recalled.private_memories.len(), 1);
+    assert_eq!(
+        recalled.private_memories[0].subject_ref,
+        format!("memory:{active}@1")
+    );
 }
 
 #[test]
@@ -363,6 +613,35 @@ fn route_returns_bounded_navigation_metadata_without_memory_or_knowledge_bodies(
     );
     let engine = RecallEngine::new(codex_vault.clone(), knowledge);
 
+    seed_memory_with_validity(
+        &codex_vault,
+        &codex,
+        "Future route marker",
+        "FUTURE_ROUTE_BODY_MUST_NOT_APPEAR",
+        "route-future",
+        Some(Utc::now() + Duration::milliseconds(150)),
+        None,
+    );
+    codex_vault.rebuild_navigation().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let future = engine
+        .recall(RecallRequest {
+            detail: RecallDetail::Route,
+            ..RecallRequest::new("Future route marker")
+        })
+        .unwrap();
+    assert!(
+        future
+            .navigation_topics
+            .iter()
+            .any(|topic| topic.title == "Future route marker")
+    );
+    assert!(
+        !serde_json::to_string(&future)
+            .unwrap()
+            .contains("FUTURE_ROUTE_BODY")
+    );
+
     let bundle = engine
         .recall(RecallRequest {
             detail: RecallDetail::Route,
@@ -404,13 +683,56 @@ fn route_returns_bounded_navigation_metadata_without_memory_or_knowledge_bodies(
     assert_eq!(degraded.map_status, "degraded");
     assert!(
         degraded
+            .candidate_sources
+            .contains(&"private_canonical".into())
+    );
+    assert_eq!(
+        degraded.fallback_reason.as_deref(),
+        Some("navigation_projection_fallback")
+    );
+    assert!(
+        degraded
             .navigation_topics
             .iter()
             .any(|topic| topic.lane == "private_memory")
     );
+
+    rusqlite::Connection::open(root.path().join("knowledge/art-control.sqlite3"))
+        .unwrap()
+        .execute("DROP TABLE knowledge_navigation", [])
+        .unwrap();
+    let applicability_fallback = engine
+        .recall(RecallRequest {
+            detail: RecallDetail::Route,
+            ..RecallRequest::new("local coding agents")
+        })
+        .unwrap();
+    assert!(
+        applicability_fallback
+            .navigation_topics
+            .iter()
+            .any(|topic| topic.lane == "shared_knowledge")
+    );
+    assert!(
+        applicability_fallback
+            .candidate_sources
+            .contains(&"shared_canonical".into())
+    );
 }
 
 fn seed_memory(vault: &AgentVault, agent: &AgentId, title: &str, text: &str, key: &str) -> String {
+    seed_memory_with_validity(vault, agent, title, text, key, None, None)
+}
+
+fn seed_memory_with_validity(
+    vault: &AgentVault,
+    agent: &AgentId,
+    title: &str,
+    text: &str,
+    key: &str,
+    valid_from: Option<chrono::DateTime<Utc>>,
+    valid_until: Option<chrono::DateTime<Utc>>,
+) -> String {
     let mut memory = MemoryArtifact::new(
         agent.clone(),
         title,
@@ -427,6 +749,8 @@ fn seed_memory(vault: &AgentVault, agent: &AgentId, title: &str, text: &str, key
         Utc::now(),
     )
     .unwrap();
+    memory.valid_from = valid_from;
+    memory.valid_until = valid_until;
     memory.transition(MemoryStatus::Active, Utc::now()).unwrap();
     let anchor = SourceAnchor::new(
         agent.clone(),
@@ -442,12 +766,60 @@ fn seed_memory(vault: &AgentVault, agent: &AgentId, title: &str, text: &str, key
     memory.id
 }
 
+fn seed_candidate_memory(
+    vault: &AgentVault,
+    agent: &AgentId,
+    title: &str,
+    text: &str,
+    key: &str,
+) -> String {
+    let memory = MemoryArtifact::new(
+        agent.clone(),
+        title,
+        text,
+        MemoryPayload::Procedure(ProcedurePayload {
+            prerequisites: vec!["candidate only".into()],
+            steps: vec![text.into()],
+            verification: vec!["human review required".into()],
+            rollback: vec!["discard candidate".into()],
+            do_not_use_when: vec!["not yet active".into()],
+        }),
+        MemoryScope::Repository("agent-recall-trail".into()),
+        Sensitivity::Private,
+        Utc::now(),
+    )
+    .unwrap();
+    let anchor = SourceAnchor::new(
+        agent.clone(),
+        AnchorKind::TestReceipt,
+        "test:candidate",
+        Some("candidate".into()),
+        json!({"exit_code":0}),
+        Sensitivity::Private,
+        Utc::now(),
+    )
+    .unwrap();
+    vault.capture(&memory, &[anchor], key).unwrap();
+    memory.id
+}
+
 fn publish_knowledge(
     vault: &KnowledgeVault,
     agent: &AgentId,
     key: &str,
     title: &str,
     body: &str,
+) -> String {
+    publish_knowledge_version(vault, agent, key, title, body, &format!("proposal-{key}"))
+}
+
+fn publish_knowledge_version(
+    vault: &KnowledgeVault,
+    agent: &AgentId,
+    key: &str,
+    title: &str,
+    body: &str,
+    idempotency_key: &str,
 ) -> String {
     let source = ProposalSourceLock {
         source_type: ProposalSourceType::FileSnapshot,
@@ -464,7 +836,7 @@ fn publish_knowledge(
             agent,
             KnowledgeDraft::minimal(key, title, body),
             vec![source],
-            &format!("proposal-{key}"),
+            idempotency_key,
         )
         .unwrap();
     vault

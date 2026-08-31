@@ -260,6 +260,34 @@ fn configured_embedding_is_opt_in_and_missing_projections_fall_back_safely() {
         semantic["fallback_reason"],
         "semantic_projection_unavailable"
     );
+
+    let retrieval_dir = root.path().join("config/art/retrieval");
+    fs::create_dir_all(&retrieval_dir).unwrap();
+    write_private_fixture(
+        &retrieval_dir.join("fusion.json"),
+        br#"{"version":"art.rank-fusion.v1","lexical_weight":-1.0,"semantic_weight":1.0,"rrf_k":60}"#,
+    );
+    let invalid_fusion = art()
+        .args([
+            "--home",
+            home,
+            "recall",
+            "marker",
+            "--agent",
+            "codex-primary",
+            "--mode",
+            "hybrid",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(invalid_fusion.status.success());
+    let invalid_fusion: serde_json::Value = serde_json::from_slice(&invalid_fusion.stdout).unwrap();
+    assert_eq!(invalid_fusion["vector_status"], "degraded");
+    assert_eq!(
+        invalid_fusion["fallback_reason"],
+        "rank_fusion_configuration_invalid"
+    );
 }
 
 #[test]

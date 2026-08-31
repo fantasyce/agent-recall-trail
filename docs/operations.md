@@ -47,6 +47,23 @@ art --home /absolute/art-home reindex \
 
 Progress is emitted as bounded JSON counters on stderr. Interrupted staging is retained and resumes completed batches; the previous complete projection remains active until the replacement validates and is installed atomically. Vectors are disposable and excluded from backup, restore, knowledge export, and public source control.
 
+Hybrid fusion is also explicit and user-configurable. To override the versioned
+default, create `<ART_HOME>/config/art/retrieval/fusion.json` as one regular
+mode-`0600` file:
+
+```json
+{
+  "version": "art.rank-fusion.v1",
+  "lexical_weight": 1.0,
+  "semantic_weight": 0.7,
+  "rrf_k": 60
+}
+```
+
+Weights must be finite and non-negative, at least one must be non-zero, and
+`rrf_k` must be between 1 and 1000. An invalid policy disables the optional
+semantic path with a safe diagnostic; it never silently changes ranking.
+
 ## Human workflow
 
 1. Agent captures sourced private memory.

@@ -19,7 +19,7 @@ ART exposes one recall API with four explicit retrieval modes: `lexical`, `full_
 - `lexical` uses local BM25 plus exact, token, Jieba, and CJK-bigram signals.
 - `full_scan` ranks every governance-eligible canonical record. It needs no embedding service and is intended for completeness-sensitive, smaller stores.
 - `semantic` uses only an explicitly configured embedding endpoint and disposable local vector projections.
-- `hybrid` combines lexical and semantic ranks. If the optional provider or projection is unavailable, ART returns the unchanged lexical result and reports the fallback.
+- `hybrid` combines lexical and semantic ranks through an owner-configurable, versioned fusion policy. If the optional provider or projection is unavailable, ART returns the unchanged lexical result and reports the fallback.
 
 ART's optional embedding adapter is supplied and operated by the user. ART does not bundle, download, train, select, or make quality claims for a model merely because its endpoint is compatible.
 
@@ -60,7 +60,7 @@ and reproducible lexical BEIR gates. See
 [operations](docs/operations.md#backup-and-disaster-recovery) before creating
 the dedicated private Git repository.
 
-Configuration precedence is `--home`, then `--config <file>`, then the owner-only user config at `~/.across/config/art/config.json`, then the built-in `~/.across` root. The root config accepts only `schema` and `home`. Optional embedding configuration is isolated at `<ART_HOME>/config/art/embedding/default.json`; tokens, when needed, live in a separate owner-only file.
+Configuration precedence is `--home`, then `--config <file>`, then the owner-only user config at `~/.across/config/art/config.json`, then the built-in `~/.across` root. The root config accepts only `schema` and `home`. Optional embedding configuration is isolated at `<ART_HOME>/config/art/embedding/default.json`; optional rank fusion policy lives at `<ART_HOME>/config/art/retrieval/fusion.json`; tokens, when needed, live in a separate owner-only file.
 
 ## Documentation
 
