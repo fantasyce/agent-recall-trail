@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fs, str::FromStr};
 
 use art_domain::{
     agent::{AgentId, ArtPaths},
@@ -20,6 +20,44 @@ fn server() -> (tempfile::TempDir, ArtMcpServer) {
     let agent = AgentId::from_str("codex-primary").unwrap();
     let server = ArtMcpServer::open(&paths, agent, [4; 32]).unwrap();
     (root, server)
+}
+
+#[tokio::test]
+async fn mcp_discovers_optional_embedding_without_changing_the_six_tool_surface() {
+    let root = tempdir().unwrap();
+    let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
+    let config_dir = root.path().join("config/art/embedding");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("default.json");
+    fs::write(
+        &config,
+        serde_json::to_vec(&json!({
+            "schema":"art.embedding.endpoint.v1",
+            "protocol":"openai_compatible",
+            "endpoint":"https://embedding.example.test",
+            "model":"operator/model",
+            "revision":"r1",
+            "dimensions":3,
+            "normalized":true,
+            "timeout_ms":500
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let server = ArtMcpServer::open(
+        &paths,
+        AgentId::from_str("codex-primary").unwrap(),
+        [46; 32],
+    )
+    .unwrap();
+    assert_eq!(server.tool_names().len(), 6);
+    let health = server.art_health(Parameters(HealthInput {})).await.unwrap();
+    assert_eq!(health.0.fields["vector_status"], "stale");
 }
 
 #[test]

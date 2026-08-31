@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 
 use art_agent_store::AgentVault;
@@ -18,7 +19,12 @@ use art_knowledge::{
     backup::{create_backup, restore_backup, verify_backup},
 };
 use art_mcp::{ArtMcpServer, run_stdio_server};
-use art_retrieval::{RecallDetail, RecallEngine, RecallRequest, RetrievalMode};
+use art_retrieval::{
+    EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RecallDetail, RecallEngine,
+    RecallRequest, RetrievalMode, SemanticProjection, SemanticRuntime,
+    knowledge_semantic_documents, knowledge_semantic_path, private_semantic_documents,
+    private_semantic_path,
+};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -140,6 +146,8 @@ enum Command {
         knowledge: bool,
         #[arg(long)]
         navigation: bool,
+        #[arg(long)]
+        vectors: bool,
     },
 }
 
@@ -501,15 +509,17 @@ async fn run(cli: Cli) -> ArtResult<()> {
             max_knowledge_results,
         } => {
             let (vault, knowledge) = runtime(&paths, &agent)?;
-            print_json(&RecallEngine::new(vault, knowledge).recall(RecallRequest {
-                query,
-                mode: mode.into(),
-                detail: detail.into(),
-                include_candidates,
-                budget_tokens,
-                max_private_results,
-                max_knowledge_results,
-            })?)
+            print_json(&configured_recall_engine(&paths, vault, knowledge).recall(
+                RecallRequest {
+                    query,
+                    mode: mode.into(),
+                    detail: detail.into(),
+                    include_candidates,
+                    budget_tokens,
+                    max_private_results,
+                    max_knowledge_results,
+                },
+            )?)
         }
         Command::Memory { command } => memory_command(&paths, command),
         Command::Knowledge { command } => knowledge_command(&paths, command),
@@ -536,9 +546,25 @@ async fn run(cli: Cli) -> ArtResult<()> {
             agent,
             knowledge,
             navigation,
+            vectors,
         } => {
+            if vectors && (agent.is_none() || !knowledge) {
+                return Err(ArtError::InvalidInput(
+                    "vector reindex requires --agent and --knowledge".into(),
+                ));
+            }
+            let embedding = if vectors {
+                let endpoint = EmbeddingEndpoint::load(
+                    &paths.root().join("config/art/embedding/default.json"),
+                )?;
+                let provider = Arc::new(OpenAiCompatibleEmbeddingProvider::new(endpoint.clone())?);
+                Some((endpoint, provider))
+            } else {
+                None
+            };
             let mut private_memories = None;
             let mut private_navigation = None;
+            let mut private_vectors = None;
             if let Some(agent) = agent {
                 let (vault, _) = runtime(&paths, &agent)?;
                 if !vault.integrity_check()? {
@@ -548,10 +574,26 @@ async fn run(cli: Cli) -> ArtResult<()> {
                 if navigation {
                     private_navigation = Some(vault.rebuild_navigation()?);
                 }
+                if let Some((endpoint, provider)) = &embedding {
+                    let documents = private_semantic_documents(&vault)?;
+                    private_vectors = Some(SemanticProjection::rebuild_with_progress(
+                        &private_semantic_path(vault.path()),
+                        endpoint,
+                        &vault.index_epoch()?,
+                        &documents,
+                        provider.as_ref(),
+                        &|progress| {
+                            eprintln!(
+                                "{}",
+                                json!({"schema":"art.embedding.reindex.progress.v1","lane":"private","completed":progress.completed,"total":progress.total,"resumed":progress.resumed})
+                            );
+                        },
+                    )?);
+                }
                 vault.checkpoint_wal()?;
             }
-            let (knowledge_editions, knowledge_navigation) = if knowledge {
-                let (editions, navigation_count) = {
+            let (knowledge_editions, knowledge_navigation, knowledge_vectors) = if knowledge {
+                let (editions, navigation_count, vector_count) = {
                     let vault = KnowledgeVault::open(paths.knowledge_vault(), load_key(&paths)?)?;
                     let rebuilt = vault.rebuild_projection()?;
                     vault.rebuild_search_index()?;
@@ -560,15 +602,33 @@ async fn run(cli: Cli) -> ArtResult<()> {
                     } else {
                         None
                     };
+                    let vector_count = if let Some((endpoint, provider)) = &embedding {
+                        let documents = knowledge_semantic_documents(&vault)?;
+                        Some(SemanticProjection::rebuild_with_progress(
+                            &knowledge_semantic_path(&paths.knowledge_vault()),
+                            endpoint,
+                            &vault.index_epoch()?,
+                            &documents,
+                            provider.as_ref(),
+                            &|progress| {
+                                eprintln!(
+                                    "{}",
+                                    json!({"schema":"art.embedding.reindex.progress.v1","lane":"knowledge","completed":progress.completed,"total":progress.total,"resumed":progress.resumed})
+                                );
+                            },
+                        )?)
+                    } else {
+                        None
+                    };
                     vault.checkpoint_wal()?;
-                    (rebuilt, navigation_count)
+                    (rebuilt, navigation_count, vector_count)
                 };
-                (Some(editions), navigation_count)
+                (Some(editions), navigation_count, vector_count)
             } else {
-                (None, None)
+                (None, None, None)
             };
             print_json(
-                &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"private_navigation":private_navigation,"knowledge":knowledge,"knowledge_editions":knowledge_editions,"knowledge_navigation":knowledge_navigation}),
+                &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"private_navigation":private_navigation,"private_vectors":private_vectors,"knowledge":knowledge,"knowledge_editions":knowledge_editions,"knowledge_navigation":knowledge_navigation,"knowledge_vectors":knowledge_vectors}),
             )
         }
     }
@@ -808,6 +868,9 @@ fn doctor(
         let (vault, knowledge) = runtime(paths, agent)?;
         let private = vault.diagnostics()?;
         let shared = knowledge.diagnostics()?;
+        let vector_status = configured_recall_engine(paths, vault, knowledge)
+            .vector_status()
+            .to_owned();
         let status = if private.integrity_ok
             && private.foreign_key_violations == 0
             && private.bound_agent_id == agent
@@ -842,7 +905,7 @@ fn doctor(
             "process":{"fd_count":current_fd_count(),"active_requests":0,"task_queue":0},
             "integration_config":{"codex":"not_modified","dsh":"not_modified"},
             "repair_preview":recovery,
-            "vector_status":"unavailable"
+            "vector_status":vector_status
         }));
     }
     let knowledge = KnowledgeVault::open(paths.knowledge_vault(), load_key(paths)?)?;
@@ -1320,6 +1383,53 @@ fn runtime(paths: &ArtPaths, agent: &str) -> ArtResult<(AgentVault, KnowledgeVau
         AgentVault::open(paths.agent_vault(&agent), agent)?,
         KnowledgeVault::open(paths.knowledge_vault(), key)?,
     ))
+}
+
+fn configured_recall_engine(
+    paths: &ArtPaths,
+    private: AgentVault,
+    knowledge: KnowledgeVault,
+) -> RecallEngine {
+    let engine = RecallEngine::new(private.clone(), knowledge.clone());
+    let config = paths.root().join("config/art/embedding/default.json");
+    if !config.exists() {
+        return engine;
+    }
+    let endpoint = match EmbeddingEndpoint::load(&config) {
+        Ok(endpoint) => endpoint,
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_configuration_invalid");
+        }
+    };
+    let provider = match OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) {
+        Ok(provider) => Arc::new(provider),
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
+        }
+    };
+    let private_epoch = match private.index_epoch() {
+        Ok(epoch) => epoch,
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
+        }
+    };
+    let knowledge_epoch = match knowledge.index_epoch() {
+        Ok(epoch) => epoch,
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
+        }
+    };
+    match SemanticRuntime::open(
+        &endpoint,
+        provider,
+        &private_semantic_path(private.path()),
+        &private_epoch,
+        &knowledge_semantic_path(&paths.knowledge_vault()),
+        &knowledge_epoch,
+    ) {
+        Ok(runtime) => engine.with_semantic(runtime),
+        Err(_) => engine.with_semantic_unavailable("stale", "semantic_projection_unavailable"),
+    }
 }
 fn identity_and_key(paths: &ArtPaths, agent: &str) -> ArtResult<(AgentId, [u8; 32])> {
     let id = AgentId::from_str(agent)?;

@@ -16,6 +16,15 @@ fn art() -> Command {
     Command::new(env!("CARGO_BIN_EXE_art"))
 }
 
+fn write_private_fixture(path: &std::path::Path, bytes: &[u8]) {
+    fs::write(path, bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
 #[test]
 fn help_exposes_operator_and_mcp_surfaces() {
     let output = art().arg("--help").output().unwrap();
@@ -93,6 +102,12 @@ fn recall_result_depth_flags_are_exposed_and_validated() {
 
 #[test]
 fn reindex_navigation_rebuilds_both_lane_local_maps_and_doctor_reports_alignment() {
+    let help = art().args(["reindex", "--help"]).output().unwrap();
+    assert!(
+        String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("--vectors")
+    );
     let root = tempdir().unwrap();
     let home = root.path().to_str().unwrap();
     assert!(
@@ -154,6 +169,97 @@ fn reindex_navigation_rebuilds_both_lane_local_maps_and_doctor_reports_alignment
     let doctor: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
     assert_eq!(doctor["agent_vault"]["navigation_aligned"], true);
     assert_eq!(doctor["knowledge"]["navigation_aligned"], true);
+}
+
+#[test]
+fn configured_embedding_is_opt_in_and_missing_projections_fall_back_safely() {
+    let root = tempdir().unwrap();
+    let home = root.path().to_str().unwrap();
+    assert!(
+        art()
+            .args(["--home", home, "init", "--confirm"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        art()
+            .args([
+                "--home",
+                home,
+                "agent",
+                "create",
+                "--id",
+                "codex-primary",
+                "--host",
+                "codex",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let embedding_dir = root.path().join("config/art/embedding");
+    fs::create_dir_all(&embedding_dir).unwrap();
+    write_private_fixture(
+        &embedding_dir.join("default.json"),
+        serde_json::to_vec(&json!({
+            "schema":"art.embedding.endpoint.v1",
+            "protocol":"openai_compatible",
+            "endpoint":"https://embedding.example.test",
+            "model":"operator/model",
+            "revision":"r1",
+            "dimensions":3,
+            "normalized":true,
+            "timeout_ms":500
+        }))
+        .unwrap()
+        .as_slice(),
+    );
+
+    let default = art()
+        .args([
+            "--home",
+            home,
+            "recall",
+            "marker",
+            "--agent",
+            "codex-primary",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(default.status.success());
+    let default: serde_json::Value = serde_json::from_slice(&default.stdout).unwrap();
+    assert_eq!(default["requested_mode"], "lexical");
+    assert_eq!(default["effective_mode"], "lexical");
+
+    let semantic = art()
+        .args([
+            "--home",
+            home,
+            "recall",
+            "marker",
+            "--agent",
+            "codex-primary",
+            "--mode",
+            "semantic",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        semantic.status.success(),
+        "{}",
+        String::from_utf8_lossy(&semantic.stderr)
+    );
+    let semantic: serde_json::Value = serde_json::from_slice(&semantic.stdout).unwrap();
+    assert_eq!(semantic["requested_mode"], "semantic");
+    assert_eq!(semantic["effective_mode"], "lexical");
+    assert_eq!(semantic["vector_status"], "stale");
+    assert_eq!(
+        semantic["fallback_reason"],
+        "semantic_projection_unavailable"
+    );
 }
 
 #[test]

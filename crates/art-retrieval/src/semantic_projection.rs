@@ -55,6 +55,13 @@ pub struct SemanticRank {
     pub cosine_similarity: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SemanticRebuildProgress {
+    pub completed: u64,
+    pub total: u64,
+    pub resumed: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct SemanticProjection {
     path: PathBuf,
@@ -79,6 +86,17 @@ impl SemanticProjection {
         source_epoch: &str,
         documents: &[SemanticDocument],
         provider: &dyn EmbeddingProvider,
+    ) -> ArtResult<u64> {
+        Self::rebuild_with_progress(path, endpoint, source_epoch, documents, provider, &|_| {})
+    }
+
+    pub fn rebuild_with_progress(
+        path: &Path,
+        endpoint: &EmbeddingEndpoint,
+        source_epoch: &str,
+        documents: &[SemanticDocument],
+        provider: &dyn EmbeddingProvider,
+        progress: &dyn Fn(SemanticRebuildProgress),
     ) -> ArtResult<u64> {
         if source_epoch.trim().is_empty() || provider.fingerprint() != endpoint.fingerprint() {
             return Err(ArtError::InvalidInput(
@@ -132,6 +150,15 @@ impl SemanticProjection {
             )?
         };
         let completed = completed_subjects(&connection)?;
+        let resumed = !completed.is_empty();
+        let mut completed_count = completed.len();
+        progress(SemanticRebuildProgress {
+            completed: u64::try_from(completed_count)
+                .map_err(|error| ArtError::Internal(error.to_string()))?,
+            total: u64::try_from(documents.len())
+                .map_err(|error| ArtError::Internal(error.to_string()))?,
+            resumed,
+        });
         let pending: Vec<_> = documents
             .iter()
             .filter(|document| !completed.contains(&document.subject_ref))
@@ -160,6 +187,14 @@ impl SemanticProjection {
                     .map_err(db_error)?;
             }
             transaction.commit().map_err(db_error)?;
+            completed_count += batch.len();
+            progress(SemanticRebuildProgress {
+                completed: u64::try_from(completed_count)
+                    .map_err(|error| ArtError::Internal(error.to_string()))?,
+                total: u64::try_from(documents.len())
+                    .map_err(|error| ArtError::Internal(error.to_string()))?,
+                resumed,
+            });
         }
         connection
             .execute(

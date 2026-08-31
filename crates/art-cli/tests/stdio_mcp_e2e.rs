@@ -1,8 +1,19 @@
 use std::{
     io::Write,
     process::{Command, Stdio},
+    str::FromStr,
 };
 
+use art_agent_store::AgentVault;
+use art_domain::{
+    agent::{AgentId, ArtPaths},
+    anchor::{AnchorKind, SourceAnchor},
+    memory::{
+        MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, SemanticPayload, Sensitivity,
+    },
+};
+use chrono::Utc;
+use serde_json::json;
 use tempfile::tempdir;
 
 fn art() -> Command {
@@ -72,6 +83,112 @@ fn stdio_initialize_list_tools_and_eof_exit_cleanly() {
     let tools = &responses.iter().find(|value| value["id"] == 2).unwrap()["result"]["tools"];
     assert_eq!(tools.as_array().unwrap().len(), 6);
     assert!(responses.iter().all(|value| value.get("jsonrpc").is_some()));
+}
+
+#[test]
+fn stdio_progressive_route_recall_and_exact_read_stay_bound_to_one_agent() {
+    let root = tempdir().unwrap();
+    let home = root.path().to_str().unwrap();
+    assert!(
+        art()
+            .args(["--home", home, "init", "--confirm"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        art()
+            .args([
+                "--home",
+                home,
+                "agent",
+                "create",
+                "--id",
+                "codex-primary",
+                "--host",
+                "codex",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = AgentVault::open(paths.agent_vault(&agent), agent.clone()).unwrap();
+    let mut memory = MemoryArtifact::new(
+        agent.clone(),
+        "Progressive release recovery",
+        "STDIO_EXACT_BODY_MARKER",
+        MemoryPayload::Semantic(SemanticPayload {
+            statement: "recover the release process".into(),
+            applicability: "progressive MCP journey".into(),
+            exceptions: vec![],
+        }),
+        MemoryScope::Repository("agent-recall-trail".into()),
+        Sensitivity::Private,
+        Utc::now(),
+    )
+    .unwrap();
+    memory.transition(MemoryStatus::Active, Utc::now()).unwrap();
+    let anchor = SourceAnchor::new(
+        agent,
+        AnchorKind::TestReceipt,
+        "test:stdio-progressive",
+        Some("passed".into()),
+        json!({"exit_code":0}),
+        Sensitivity::Private,
+        Utc::now(),
+    )
+    .unwrap();
+    vault
+        .capture(&memory, &[anchor], "stdio-progressive-memory")
+        .unwrap();
+    let subject_ref = format!("memory:{}@1", memory.id);
+
+    let mut child = art()
+        .args(["--home", home, "mcp", "serve", "--agent", "codex-primary"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin,"{}",json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"art-progressive-test","version":"1"}}})).unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}})
+    )
+    .unwrap();
+    writeln!(stdin,"{}",json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"art_recall","arguments":{"query":"release recovery","detail":"route","mode":"lexical"}}})).unwrap();
+    writeln!(stdin,"{}",json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"art_recall","arguments":{"query":"release recovery","detail":"recall","mode":"lexical"}}})).unwrap();
+    writeln!(stdin,"{}",json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"art_read","arguments":{"subject_ref":subject_ref,"include_anchors":false}}})).unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let response = |id| responses.iter().find(|value| value["id"] == id).unwrap();
+    let route = serde_json::to_string(response(2)).unwrap();
+    assert!(route.contains("navigation_topics"));
+    assert!(!route.contains("STDIO_EXACT_BODY_MARKER"));
+    assert!(
+        serde_json::to_string(response(3))
+            .unwrap()
+            .contains("private_memories")
+    );
+    assert!(
+        serde_json::to_string(response(4))
+            .unwrap()
+            .contains("STDIO_EXACT_BODY_MARKER")
+    );
 }
 
 #[test]

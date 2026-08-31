@@ -17,8 +17,8 @@ pub use semantic::{
     SemanticRanks, SemanticRuntime, knowledge_semantic_documents, private_semantic_documents,
 };
 pub use semantic_projection::{
-    SemanticDocument, SemanticProjection, SemanticRank, knowledge_semantic_path,
-    private_semantic_path,
+    SemanticDocument, SemanticProjection, SemanticRank, SemanticRebuildProgress,
+    knowledge_semantic_path, private_semantic_path,
 };
 
 use std::{
@@ -121,6 +121,8 @@ pub struct RecallEngine {
     private_vault: AgentVault,
     knowledge_vault: KnowledgeVault,
     semantic: Option<SemanticRuntime>,
+    semantic_unavailable_status: String,
+    semantic_unavailable_reason: String,
 }
 
 #[derive(Debug)]
@@ -151,12 +153,32 @@ impl RecallEngine {
             private_vault,
             knowledge_vault,
             semantic: None,
+            semantic_unavailable_status: "unavailable".into(),
+            semantic_unavailable_reason: "semantic_unconfigured".into(),
         }
     }
 
     pub fn with_semantic(mut self, semantic: SemanticRuntime) -> Self {
         self.semantic = Some(semantic);
         self
+    }
+
+    pub fn with_semantic_unavailable(
+        mut self,
+        status: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        self.semantic_unavailable_status = status.into();
+        self.semantic_unavailable_reason = reason.into();
+        self
+    }
+
+    pub fn vector_status(&self) -> &str {
+        if self.semantic.is_some() {
+            "ready"
+        } else {
+            &self.semantic_unavailable_status
+        }
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -181,8 +203,8 @@ impl RecallEngine {
         let (mut effective_mode, mut vector_status, mut fallback_reason) = match request.mode {
             RetrievalMode::Semantic | RetrievalMode::Hybrid if self.semantic.is_none() => (
                 RetrievalMode::Lexical,
-                "unavailable",
-                Some("semantic_unconfigured".to_owned()),
+                self.semantic_unavailable_status.as_str(),
+                Some(self.semantic_unavailable_reason.clone()),
             ),
             RetrievalMode::Semantic | RetrievalMode::Hybrid => (request.mode, "ready", None),
             _ => (request.mode, "unavailable", None),

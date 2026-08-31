@@ -171,12 +171,26 @@ fn interrupted_rebuild_preserves_progress_and_resumes_without_reembedding_comple
         fail_after: None,
         fingerprint: endpoint.fingerprint(),
     };
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let observed = progress.clone();
     assert_eq!(
-        SemanticProjection::rebuild(&path, &endpoint, "epoch", &documents(20), &resumed).unwrap(),
+        SemanticProjection::rebuild_with_progress(
+            &path,
+            &endpoint,
+            "epoch",
+            &documents(20),
+            &resumed,
+            &move |update| observed.lock().unwrap().push(update),
+        )
+        .unwrap(),
         20
     );
     let all_calls = calls.lock().unwrap();
     assert_eq!(all_calls.len(), 2);
     assert_eq!(all_calls[1].len(), 4);
+    let progress = progress.lock().unwrap();
+    assert_eq!(progress.first().unwrap().completed, 16);
+    assert!(progress.first().unwrap().resumed);
+    assert_eq!(progress.last().unwrap().completed, 20);
     assert!(SemanticProjection::open(&path, &endpoint, "epoch").is_ok());
 }

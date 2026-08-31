@@ -18,7 +18,10 @@ use art_domain::{
     memory::{MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity},
 };
 use art_knowledge::KnowledgeVault;
-use art_retrieval::{RecallDetail, RecallEngine, RecallRequest, RetrievalMode};
+use art_retrieval::{
+    EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RecallDetail, RecallEngine,
+    RecallRequest, RetrievalMode, SemanticRuntime, knowledge_semantic_path, private_semantic_path,
+};
 use chrono::Utc;
 use rmcp::{
     Json, ServerHandler, ServiceExt,
@@ -150,7 +153,8 @@ impl ArtMcpServer {
     pub fn open(paths: &ArtPaths, agent_id: AgentId, commitment_key: [u8; 32]) -> ArtResult<Self> {
         let private_vault = AgentVault::open(paths.agent_vault(&agent_id), agent_id.clone())?;
         let knowledge_vault = KnowledgeVault::open(paths.knowledge_vault(), commitment_key)?;
-        let recall_engine = RecallEngine::new(private_vault.clone(), knowledge_vault.clone());
+        let recall_engine =
+            configured_recall_engine(paths, private_vault.clone(), knowledge_vault.clone());
         Ok(Self {
             tool_router: Self::tool_router(),
             agent_id,
@@ -464,8 +468,9 @@ impl ArtMcpServer {
         } else {
             "degraded"
         };
+        let vector_status = self.recall_engine.vector_status();
         Ok(Json(ToolOutput::from_value(
-            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":"unavailable"}),
+            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status}),
         )?))
     }
 }
@@ -487,6 +492,53 @@ pub async fn run_stdio_server(server: ArtMcpServer) -> ArtResult<()> {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(3), &mut waiter).await;
             Err(ArtError::ShuttingDown)
         }
+    }
+}
+
+fn configured_recall_engine(
+    paths: &ArtPaths,
+    private: AgentVault,
+    knowledge: KnowledgeVault,
+) -> RecallEngine {
+    let engine = RecallEngine::new(private.clone(), knowledge.clone());
+    let config = paths.root().join("config/art/embedding/default.json");
+    if !config.exists() {
+        return engine;
+    }
+    let endpoint = match EmbeddingEndpoint::load(&config) {
+        Ok(endpoint) => endpoint,
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_configuration_invalid");
+        }
+    };
+    let provider = match OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) {
+        Ok(provider) => Arc::new(provider),
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
+        }
+    };
+    let private_epoch = match private.index_epoch() {
+        Ok(epoch) => epoch,
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
+        }
+    };
+    let knowledge_epoch = match knowledge.index_epoch() {
+        Ok(epoch) => epoch,
+        Err(_) => {
+            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
+        }
+    };
+    match SemanticRuntime::open(
+        &endpoint,
+        provider,
+        &private_semantic_path(private.path()),
+        &private_epoch,
+        &knowledge_semantic_path(&paths.knowledge_vault()),
+        &knowledge_epoch,
+    ) {
+        Ok(runtime) => engine.with_semantic(runtime),
+        Err(_) => engine.with_semantic_unavailable("stale", "semantic_projection_unavailable"),
     }
 }
 
