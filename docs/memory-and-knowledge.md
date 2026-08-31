@@ -37,6 +37,13 @@ The manifest omits Agent IDs, private memory IDs, source locators, and excerpts.
 
 A Recall Bundle has separate `private_memories` and `knowledge_editions` arrays, a query hash, generation and expiry times, omissions, cautions, token budget, and `persist_policy=no_automatic_capture`. The Bundle is temporary output and must not become a new memory automatically.
 
-## Ranking
+## Progressive retrieval
 
-ART v0.2.0 uses deterministic local retrieval: FTS5 BM25 ordering fused with bounded normalized exact, Unicode-aware token, Jieba segmentation, and CJK-bigram signals. Private and shared stores maintain separate persistent projections, select bounded candidates locally, and evaluate eligibility before ranking. Operators may request 1 through 20 private and shared results; the default remains three per lane and the token budget still bounds output. Both projections are rebuildable from authoritative memory artifacts or immutable Knowledge Editions and events. Vector status is explicitly `unavailable`; there is no silent embedding fallback.
+ART v0.3.0 keeps memory and knowledge in one product and one Recall Bundle while preserving their different authority and visibility rules. Every mode applies Agent identity, memory lifecycle, time validity, current-Edition, revocation, result-depth, and token-budget checks.
+
+- `lexical` is the deterministic default: FTS5 BM25 fused with bounded normalized exact, Unicode-aware token, Jieba segmentation, and CJK-bigram signals.
+- `full_scan` evaluates every eligible canonical record in each selected lane before ranking; it remains available without an embedding provider.
+- `semantic` ranks exact canonical references returned from an optional provider-bound projection.
+- `hybrid` fuses the lexical and semantic ranks while retaining lexical exact-match priority.
+
+Private and shared navigation, lexical, and semantic projections remain physically lane-local and rebuildable. Semantic projections contain vectors but are never authority, never enter knowledge backup/export, and are discarded when their canonical epoch or provider fingerprint changes. An unconfigured, stale, or failed semantic path reports `vector_status` and `fallback_reason` and returns the unchanged lexical candidates. Operators may request 1 through 20 private and shared results; the default remains three per lane.

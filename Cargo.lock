@@ -90,7 +90,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "art-agent-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "art-domain",
  "chrono",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "art-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "art-agent-store",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "art-domain"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "hex",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "art-knowledge"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "art-agent-store",
  "art-domain",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "art-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "art-agent-store",
  "art-domain",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "art-retrieval"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "art-agent-store",
  "art-domain",

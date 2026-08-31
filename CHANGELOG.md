@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 - 2026-08-31
+
+- Added progressive `route -> recall -> read` retrieval with bounded, lane-local navigation projections.
+- Added four explicit user-selected modes: lexical, governed full scan, optional semantic, and optional hybrid retrieval.
+- Added provider-neutral OpenAI-compatible embedding configuration, isolated disposable vector projections, resumable rebuilds, and explicit health/fallback diagnostics.
+- Preserved the unchanged lexical result path when semantic retrieval is unconfigured or unavailable.
+- Preserved physical per-Agent memory isolation, immutable human-reviewed shared Knowledge Editions, the exactly six-tool MCP surface, and deterministic backup/recovery.
+
 ## 0.2.0 - 2026-08-31
 
 - Added BM25-ranked broad candidate retrieval for private memories and shared Knowledge Editions.

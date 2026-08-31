@@ -4,7 +4,48 @@
 
 Always pass `--home` in automation. For interactive use, precedence is `--home` > explicit `--config` > owner user config > built-in root. Config contains no credential fields. `art init --confirm` creates the root and a private commitment key. Create canonical lowercase Agent IDs with `art agent create`. Each MCP child is then started with one fixed `--agent` value.
 
-`art doctor --agent <id> --json` reports binary/schema versions, profile and Vault binding, owner-only modes, SQLite integrity/foreign keys/WAL, migration checksum, record and search-index counts, index alignment, shared manifest/event hashes, stale proposals, pending publication recovery, FD count, and vector availability. `--repair-preview` returns exact human recovery targets; `--apply` is deliberately rejected because Doctor never mutates implicitly. `art reindex --agent <id>` rebuilds the private lexical projection and checkpoints WAL; `--knowledge` rebuilds the shared projection and lexical index from immutable files/events.
+`art doctor --agent <id> --json` reports binary/schema versions, profile and Vault binding, owner-only modes, SQLite integrity/foreign keys/WAL, migration checksum, record and search-index counts, index and navigation alignment, shared manifest/event hashes, stale proposals, pending publication recovery, FD count, and vector availability. `--repair-preview` returns exact human recovery targets; `--apply` is deliberately rejected because Doctor never mutates implicitly. `art reindex --agent <id>` rebuilds the private lexical projection and checkpoints WAL; `--knowledge` rebuilds the shared projection and lexical index from immutable files/events. Add `--navigation` to rebuild the lane-local route maps.
+
+## Retrieval modes and optional embedding
+
+The same recall command supports all four modes:
+
+```bash
+art recall --agent codex-primary --mode lexical --detail route --json "release recovery"
+art recall --agent codex-primary --mode lexical --json "release recovery"
+art recall --agent codex-primary --mode full-scan --json "release recovery"
+art recall --agent codex-primary --mode semantic --json "release recovery"
+art recall --agent codex-primary --mode hybrid --json "release recovery"
+```
+
+Lexical is the default and needs no additional configuration. Full scan reads all governance-eligible canonical records. Semantic and hybrid are explicit opt-in modes. If their optional runtime is unavailable, the response reports the requested and effective modes plus a safe fallback reason and returns lexical results.
+
+To connect a user-operated OpenAI-compatible HTTPS endpoint, create `<ART_HOME>/config/art/embedding/default.json` as a regular mode-`0600` file:
+
+```json
+{
+  "schema": "art.embedding.endpoint.v1",
+  "protocol": "openai_compatible",
+  "endpoint": "https://embedding.example.invalid",
+  "model": "operator-selected-model",
+  "revision": "operator-pinned-revision",
+  "dimensions": 1024,
+  "normalized": true,
+  "timeout_ms": 5000,
+  "token_file": "/absolute/owner-only/token-file"
+}
+```
+
+`revision`, `token_file`, and `ca_file` are optional. Runtime file paths must be absolute regular mode-`0600` files. ART rejects URL credentials, query strings, fragments, redirects, non-HTTPS endpoints, invalid dimensions, and oversized inputs or responses. It reads a token only when sending a request and never returns it in diagnostics.
+
+Build current private and shared semantic projections explicitly:
+
+```bash
+art --home /absolute/art-home reindex \
+  --agent codex-primary --knowledge --vectors
+```
+
+Progress is emitted as bounded JSON counters on stderr. Interrupted staging is retained and resumes completed batches; the previous complete projection remains active until the replacement validates and is installed atomically. Vectors are disposable and excluded from backup, restore, knowledge export, and public source control.
 
 ## Human workflow
 
@@ -50,7 +91,7 @@ art backup restore --source /snapshot --target-home /absent/art-home \
 ```
 
 `create` includes only immutable Edition Markdown/manifests and lifecycle
-events. `verify` rejects missing, extra, unsupported, corrupt, symlinked, and
+events; navigation, lexical, and semantic projections are excluded. `verify` rejects missing, extra, unsupported, corrupt, symlinked, and
 hard-linked content. `restore` requires an absent target and a regular 32-byte
 mode-`0600` commitment key; it builds and verifies a sibling staging home
 before the atomic rename.

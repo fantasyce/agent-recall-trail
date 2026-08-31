@@ -1,6 +1,6 @@
 # Retrieval quality testing
 
-ART uses BEIR SciFact and NFCorpus as public, repeatable lexical retrieval
+ART uses BEIR SciFact and NFCorpus as public, repeatable default lexical retrieval
 quality gates. SciFact emphasizes precise retrieval with few relevant documents;
 NFCorpus emphasizes recall when one query has many relevant documents.
 
@@ -29,7 +29,7 @@ bash scripts/run_beir_retrieval_benchmark.sh \
 
 The harness creates disposable ART homes, projects public documents into a
 benchmark-only Knowledge Vault, executes one `art recall` process per query with
-`--budget-tokens 6000 --max-knowledge-results 10`, computes macro Recall,
+`--mode lexical --budget-tokens 6000 --max-knowledge-results 10`, computes macro Recall,
 Precision, MRR, nDCG, and Accuracy at 1/3/10, and removes the generated Vaults.
 It never reads or writes the formal ART home.
 
@@ -39,6 +39,8 @@ Release gates:
 |---|---:|---:|---:|---:|
 | SciFact | >= 0.76 | >= 0.64 | >= 0.4375 | < 350 ms |
 | NFCorpus | >= 0.14 | >= 0.29 | >= 0.2226 | < 350 ms |
+
+These thresholds qualify ART's stable default product path. An operator may run a paired semantic or hybrid evaluation for a selected endpoint, but the resulting quality belongs to that model, revision, dimensions, corpus construction, and endpoint configuration. ART does not advertise provider quality as product quality.
 
 The checked-in repository contains only the harness, checksums, metric
 definitions, and aggregate acceptance evidence. Do not add the archives,

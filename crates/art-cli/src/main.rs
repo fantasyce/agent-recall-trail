@@ -509,8 +509,8 @@ async fn run(cli: Cli) -> ArtResult<()> {
             max_knowledge_results,
         } => {
             let (vault, knowledge) = runtime(&paths, &agent)?;
-            print_json(&configured_recall_engine(&paths, vault, knowledge).recall(
-                RecallRequest {
+            print_json(
+                &configured_recall_engine(&paths, &vault, &knowledge).recall(RecallRequest {
                     query,
                     mode: mode.into(),
                     detail: detail.into(),
@@ -518,8 +518,8 @@ async fn run(cli: Cli) -> ArtResult<()> {
                     budget_tokens,
                     max_private_results,
                     max_knowledge_results,
-                },
-            )?)
+                })?,
+            )
         }
         Command::Memory { command } => memory_command(&paths, command),
         Command::Knowledge { command } => knowledge_command(&paths, command),
@@ -868,7 +868,7 @@ fn doctor(
         let (vault, knowledge) = runtime(paths, agent)?;
         let private = vault.diagnostics()?;
         let shared = knowledge.diagnostics()?;
-        let vector_status = configured_recall_engine(paths, vault, knowledge)
+        let vector_status = configured_recall_engine(paths, &vault, &knowledge)
             .vector_status()
             .to_owned();
         let status = if private.integrity_ok
@@ -1387,19 +1387,16 @@ fn runtime(paths: &ArtPaths, agent: &str) -> ArtResult<(AgentVault, KnowledgeVau
 
 fn configured_recall_engine(
     paths: &ArtPaths,
-    private: AgentVault,
-    knowledge: KnowledgeVault,
+    private: &AgentVault,
+    knowledge: &KnowledgeVault,
 ) -> RecallEngine {
     let engine = RecallEngine::new(private.clone(), knowledge.clone());
     let config = paths.root().join("config/art/embedding/default.json");
     if !config.exists() {
         return engine;
     }
-    let endpoint = match EmbeddingEndpoint::load(&config) {
-        Ok(endpoint) => endpoint,
-        Err(_) => {
-            return engine.with_semantic_unavailable("degraded", "semantic_configuration_invalid");
-        }
+    let Ok(endpoint) = EmbeddingEndpoint::load(&config) else {
+        return engine.with_semantic_unavailable("degraded", "semantic_configuration_invalid");
     };
     let provider = match OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) {
         Ok(provider) => Arc::new(provider),
@@ -1407,17 +1404,11 @@ fn configured_recall_engine(
             return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
         }
     };
-    let private_epoch = match private.index_epoch() {
-        Ok(epoch) => epoch,
-        Err(_) => {
-            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
-        }
+    let Ok(private_epoch) = private.index_epoch() else {
+        return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
     };
-    let knowledge_epoch = match knowledge.index_epoch() {
-        Ok(epoch) => epoch,
-        Err(_) => {
-            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
-        }
+    let Ok(knowledge_epoch) = knowledge.index_epoch() else {
+        return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
     };
     match SemanticRuntime::open(
         &endpoint,

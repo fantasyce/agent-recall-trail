@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - No bundled, downloaded, selected, or trained model.
-- No fixed Qwen model, quantization, host, dimension, or fusion weight in core code.
+- No fixed model, quantization, host, dimension, or fusion weight in core code.
 - Semantic configuration is explicit; endpoint presence never changes the default lexical mode.
 - Private and shared vectors remain physically separate, owner-only, disposable, and excluded from backup/Git/export.
 - Missing, stale, busy, timed-out, unauthorized, malformed, or mismatched providers return lexical results with safe diagnostics.

@@ -352,7 +352,7 @@ Extend `Reindex` with `--navigation`; include alignment/count/status without pat
 
 - [ ] **Step 4: Update all user-facing guidance together**
 
-Document the five logical layers, four modes, route→recall→read flow, lexical default, full-scan semantics, optional embedding boundary, and unchanged human knowledge governance. Remove any statement that ART 0.3 requires Qwen or a remote model.
+Document the five logical layers, four modes, route→recall→read flow, lexical default, full-scan semantics, optional embedding boundary, and unchanged human knowledge governance. Remove any statement that ART 0.3 requires a fixed or remote model.
 
 - [ ] **Step 5: Verify the complete foundation slice**
 

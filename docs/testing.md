@@ -13,7 +13,11 @@ Contract tests cover:
   control-authority round trips, atomic empty-home restore, and fresh-clone
   projection rebuild;
 - BM25-first lexical ranking, exact/Jieba/bigram signals, bounded Top-K,
-  candidate filtering, private/shared separation, and 64 Chinese golden queries;
+  governed canonical full scan, route-map degradation, candidate filtering,
+  private/shared separation, and 64 Chinese golden queries;
+- provider-neutral embedding validation, owner-only runtime files, isolated
+  epoch/fingerprint-bound semantic projections, resumable rebuild, semantic
+  no-overlap retrieval, hybrid exact priority, and byte-equivalent lexical fallback;
 - six-tool MCP success paths, strict object output schemas, revision staleness, DB busy, shutdown, no-persist rejection, legacy/current protocol initialization, JSON-only debug stdout, and EOF/signals;
 - CLI confirmation boundaries, config priority, deep Doctor diagnostics, private permissions, integration previews, reviewable Markdown scan, safe copy, and import/export behavior;
 - thin Across Context contract expiry, no-persist, and invalidation behavior without an AAA adapter.
@@ -27,13 +31,14 @@ Acceptance uses task-owned storage and temporary opt-in configuration only:
 3. DSH primary health, capture, and recall.
 4. DSH secondary negative private recall.
 5. Codex proposal, local human approval/publication, then shared Edition recall from both secondary Agents.
-6. Skill discovery and failure-boundary behavior in both hosts.
-7. Graceful EOF, abnormal disconnect, concurrency, repeated-query, file-permission, source-read-only, and residue checks.
+6. Route, lexical recall, exact read, governed full scan, and unconfigured semantic/hybrid fallback in both hosts.
+7. Skill discovery and failure-boundary behavior in both hosts.
+8. Graceful EOF, abnormal disconnect, concurrency, repeated-query, file-permission, source-read-only, and residue checks.
 
 The reproducible local stress artifact runs 500 graceful sessions, 100 abnormal disconnects, 1,000 queries in one process, 8 concurrent clients, an idle-FD ceiling of 16, and a final healthy Doctor. The release performance dataset contains 10,000 private memories and 5,000 shared Editions; reports must retain startup, cold-index, capture p95, steady recall p50/p95/p99, and concurrent maximum separately.
 
-Public retrieval quality is separately gated on the full BEIR SciFact and
-NFCorpus test splits through the compiled `art recall` command. See
+Public lexical retrieval quality is separately gated on the full BEIR SciFact and
+NFCorpus test splits through the compiled `art recall` command. Optional provider quality is operator-qualified evidence and does not replace these product gates. See
 [`testing-retrieval.md`](testing-retrieval.md) for the reproducible fixture,
 metrics, thresholds, isolation rules, and cleanup contract.
 

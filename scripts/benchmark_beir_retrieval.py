@@ -191,6 +191,8 @@ def evaluate_dataset(art: Path, dataset: str, source: Path, work: Path) -> dict:
                     str(home),
                     "--agent",
                     "benchmark-agent",
+                    "--mode",
+                    "lexical",
                     "--json",
                     "--budget-tokens",
                     "6000",

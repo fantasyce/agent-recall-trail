@@ -9,20 +9,20 @@ jobs:
     permissions: {contents: read, id-token: write}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {ref: v0.2.0, fetch-depth: 0}
+        with: {ref: v0.3.0, fetch-depth: 0}
       - name: Match completed release
         env: {RELEASE_SHA: '${{ github.event.workflow_run.head_sha }}'}
-        run: test "$(git rev-list -n 1 v0.2.0)" = "$RELEASE_SHA"
+        run: test "$(git rev-list -n 1 v0.3.0)" = "$RELEASE_SHA"
       - name: Download published bundle
         env: {GH_TOKEN: '${{ github.token }}'}
-        run: gh release download v0.2.0 --pattern 'agent-recall-trail_0.2.0.mcpb' --dir "$RUNNER_TEMP/release"
+        run: gh release download v0.3.0 --pattern 'agent-recall-trail_0.3.0.mcpb' --dir "$RUNNER_TEMP/release"
       - name: Install verified publisher
         run: |
           curl --fail --location --proto '=https' --tlsv1.2 https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz --output "$RUNNER_TEMP/publisher.tar.gz"
           echo 'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  '"$RUNNER_TEMP/publisher.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
       - name: Render Registry metadata
-        run: python3 scripts/render_registry_metadata.py --template packaging/mcp-registry/server.json.in --mcpb "$RUNNER_TEMP/release/agent-recall-trail_0.2.0.mcpb" --version 0.2.0 --output "$RUNNER_TEMP/server.json"
+        run: python3 scripts/render_registry_metadata.py --template packaging/mcp-registry/server.json.in --mcpb "$RUNNER_TEMP/release/agent-recall-trail_0.3.0.mcpb" --version 0.3.0 --output "$RUNNER_TEMP/server.json"
       - name: Authenticate and publish
         run: |
           "$RUNNER_TEMP/mcp-publisher" validate "$RUNNER_TEMP/server.json"
@@ -30,6 +30,6 @@ jobs:
           "$RUNNER_TEMP/mcp-publisher" publish "$RUNNER_TEMP/server.json" --registry=https://registry.modelcontextprotocol.io
       - name: Verify public record
         run: |
-          url='https://registry.modelcontextprotocol.io/v0.1/servers/io.github.fantasyce%2Fagent-recall-trail/versions/0.2.0'
-          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do curl --fail --silent "$url" | jq -e '.server.version == "0.2.0"' && exit 0; sleep 5; done
+          url='https://registry.modelcontextprotocol.io/v0.1/servers/io.github.fantasyce%2Fagent-recall-trail/versions/0.3.0'
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do curl --fail --silent "$url" | jq -e '.server.version == "0.3.0"' && exit 0; sleep 5; done
           exit 1

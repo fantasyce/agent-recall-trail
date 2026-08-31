@@ -153,8 +153,7 @@ impl ArtMcpServer {
     pub fn open(paths: &ArtPaths, agent_id: AgentId, commitment_key: [u8; 32]) -> ArtResult<Self> {
         let private_vault = AgentVault::open(paths.agent_vault(&agent_id), agent_id.clone())?;
         let knowledge_vault = KnowledgeVault::open(paths.knowledge_vault(), commitment_key)?;
-        let recall_engine =
-            configured_recall_engine(paths, private_vault.clone(), knowledge_vault.clone());
+        let recall_engine = configured_recall_engine(paths, &private_vault, &knowledge_vault);
         Ok(Self {
             tool_router: Self::tool_router(),
             agent_id,
@@ -497,19 +496,16 @@ pub async fn run_stdio_server(server: ArtMcpServer) -> ArtResult<()> {
 
 fn configured_recall_engine(
     paths: &ArtPaths,
-    private: AgentVault,
-    knowledge: KnowledgeVault,
+    private: &AgentVault,
+    knowledge: &KnowledgeVault,
 ) -> RecallEngine {
     let engine = RecallEngine::new(private.clone(), knowledge.clone());
     let config = paths.root().join("config/art/embedding/default.json");
     if !config.exists() {
         return engine;
     }
-    let endpoint = match EmbeddingEndpoint::load(&config) {
-        Ok(endpoint) => endpoint,
-        Err(_) => {
-            return engine.with_semantic_unavailable("degraded", "semantic_configuration_invalid");
-        }
+    let Ok(endpoint) = EmbeddingEndpoint::load(&config) else {
+        return engine.with_semantic_unavailable("degraded", "semantic_configuration_invalid");
     };
     let provider = match OpenAiCompatibleEmbeddingProvider::new(endpoint.clone()) {
         Ok(provider) => Arc::new(provider),
@@ -517,17 +513,11 @@ fn configured_recall_engine(
             return engine.with_semantic_unavailable("degraded", "semantic_provider_unavailable");
         }
     };
-    let private_epoch = match private.index_epoch() {
-        Ok(epoch) => epoch,
-        Err(_) => {
-            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
-        }
+    let Ok(private_epoch) = private.index_epoch() else {
+        return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
     };
-    let knowledge_epoch = match knowledge.index_epoch() {
-        Ok(epoch) => epoch,
-        Err(_) => {
-            return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
-        }
+    let Ok(knowledge_epoch) = knowledge.index_epoch() else {
+        return engine.with_semantic_unavailable("degraded", "semantic_epoch_unavailable");
     };
     match SemanticRuntime::open(
         &endpoint,

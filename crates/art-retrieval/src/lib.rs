@@ -158,11 +158,13 @@ impl RecallEngine {
         }
     }
 
+    #[must_use]
     pub fn with_semantic(mut self, semantic: SemanticRuntime) -> Self {
         self.semantic = Some(semantic);
         self
     }
 
+    #[must_use]
     pub fn with_semantic_unavailable(
         mut self,
         status: impl Into<String>,
@@ -218,7 +220,7 @@ impl RecallEngine {
             effective_mode,
             RetrievalMode::Semantic | RetrievalMode::Hybrid
         ) {
-            match self
+            if let Ok(ranks) = self
                 .semantic
                 .as_ref()
                 .expect("semantic runtime checked")
@@ -226,14 +228,14 @@ impl RecallEngine {
                     &request.query,
                     private_candidate_limit,
                     knowledge_candidate_limit,
-                ) {
-                Ok(ranks) => Some(ranks),
-                Err(_) => {
-                    effective_mode = RetrievalMode::Lexical;
-                    vector_status = "degraded";
-                    fallback_reason = Some("semantic_provider_failure".into());
-                    None
-                }
+                )
+            {
+                Some(ranks)
+            } else {
+                effective_mode = RetrievalMode::Lexical;
+                vector_status = "degraded";
+                fallback_reason = Some("semantic_provider_failure".into());
+                None
             }
         } else {
             None
@@ -512,43 +514,37 @@ impl RecallEngine {
                 .and_then(|_| self.knowledge_vault.navigation_entries()),
         };
         let mut candidates = Vec::new();
-        match private_entries {
-            Ok(entries) => {
-                candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
-                    lane: "private_memory".into(),
-                    topic_key: format!("{}:{}", entry.scope_type, entry.scope_key),
-                    searchable_metadata: format!(
-                        "{} {} {} {}",
-                        entry.title, entry.kind, entry.scope_type, entry.scope_key
-                    ),
-                    subject_ref: format!("memory:{}@{}", entry.memory_id, entry.revision),
-                    title: entry.title,
-                    usage_count: entry.usage_count,
-                }))
-            }
-            Err(_) => {
-                map_status = "degraded".into();
-                candidates.extend(self.canonical_private_navigation_candidates()?);
-            }
+        if let Ok(entries) = private_entries {
+            candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
+                lane: "private_memory".into(),
+                topic_key: format!("{}:{}", entry.scope_type, entry.scope_key),
+                searchable_metadata: format!(
+                    "{} {} {} {}",
+                    entry.title, entry.kind, entry.scope_type, entry.scope_key
+                ),
+                subject_ref: format!("memory:{}@{}", entry.memory_id, entry.revision),
+                title: entry.title,
+                usage_count: entry.usage_count,
+            }));
+        } else {
+            map_status = "degraded".into();
+            candidates.extend(self.canonical_private_navigation_candidates()?);
         }
-        match knowledge_entries {
-            Ok(entries) => {
-                candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
-                    lane: "shared_knowledge".into(),
-                    topic_key: entry.knowledge_key.clone(),
-                    searchable_metadata: format!(
-                        "{} {} {}",
-                        entry.title, entry.knowledge_key, entry.applicability
-                    ),
-                    subject_ref: format!("knowledge:{}", entry.edition_id),
-                    title: entry.title,
-                    usage_count: entry.usage_count,
-                }))
-            }
-            Err(_) => {
-                map_status = "degraded".into();
-                candidates.extend(self.canonical_knowledge_navigation_candidates()?);
-            }
+        if let Ok(entries) = knowledge_entries {
+            candidates.extend(entries.into_iter().map(|entry| NavigationCandidate {
+                lane: "shared_knowledge".into(),
+                topic_key: entry.knowledge_key.clone(),
+                searchable_metadata: format!(
+                    "{} {} {}",
+                    entry.title, entry.knowledge_key, entry.applicability
+                ),
+                subject_ref: format!("knowledge:{}", entry.edition_id),
+                title: entry.title,
+                usage_count: entry.usage_count,
+            }));
+        } else {
+            map_status = "degraded".into();
+            candidates.extend(self.canonical_knowledge_navigation_candidates()?);
         }
         let generated_at = Utc::now();
         Ok(RecallBundle {
@@ -635,7 +631,7 @@ fn parse_memory_ref(subject_ref: &str) -> Option<(&str, u32)> {
 
 fn fused_score(mode: RetrievalMode, lexical: Option<f64>, semantic: Option<&SemanticRank>) -> f64 {
     let (semantic_quality, semantic_rrf) = semantic.map_or((0.0, 0.0), |rank| {
-        let similarity = (f64::from(rank.cosine_similarity).clamp(-1.0, 1.0) + 1.0) / 2.0;
+        let similarity = f64::midpoint(f64::from(rank.cosine_similarity).clamp(-1.0, 1.0), 1.0);
         let reciprocal_rank =
             1.0 / (60.0 + f64::from(u32::try_from(rank.rank).unwrap_or(u32::MAX)));
         (similarity + reciprocal_rank, reciprocal_rank)

@@ -127,18 +127,17 @@ impl SemanticProjection {
             })
             .collect();
         let mut connection = if staging.exists() {
-            match open_staging(&staging, &build_fingerprint, &expected) {
-                Ok(connection) => connection,
-                Err(_) => {
-                    fs::remove_file(&staging).map_err(safe_io)?;
-                    create_staging(
-                        &staging,
-                        endpoint,
-                        source_epoch,
-                        &build_fingerprint,
-                        documents.len(),
-                    )?
-                }
+            if let Ok(connection) = open_staging(&staging, &build_fingerprint, &expected) {
+                connection
+            } else {
+                fs::remove_file(&staging).map_err(safe_io)?;
+                create_staging(
+                    &staging,
+                    endpoint,
+                    source_epoch,
+                    &build_fingerprint,
+                    documents.len(),
+                )?
             }
         } else {
             create_staging(

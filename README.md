@@ -2,7 +2,7 @@
 
 ART is a local-first memory and reviewed-knowledge product for coding agents. Every Agent gets a physically separate private Recall Trail. Stable conclusions become human-reviewed, immutable Knowledge Editions that other Agents can retrieve without seeing private source identities or source bodies.
 
-ART `0.2.0` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, HTTP service, daemon, cloud sync, vector service, or autonomous publication is required.
+ART `0.3.0` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, daemon, cloud sync, bundled model, or autonomous publication is required.
 
 ## Product boundary
 
@@ -11,6 +11,17 @@ ART `0.2.0` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is stan
 - Agents may capture, recall, read, provide feedback, and create proposals.
 - Only a local human may approve, publish, revoke, supersede, archive, or make assurance decisions.
 - Stored content is evidence, never executable instruction or authorization.
+
+## Progressive recall
+
+ART exposes one recall API with four explicit retrieval modes: `lexical`, `full_scan`, `semantic`, and `hybrid`. The default is always `lexical`. A compact `route` request can identify relevant private and shared topics before a bounded `recall`; exact bodies are returned only by `read`.
+
+- `lexical` uses local BM25 plus exact, token, Jieba, and CJK-bigram signals.
+- `full_scan` ranks every governance-eligible canonical record. It needs no embedding service and is intended for completeness-sensitive, smaller stores.
+- `semantic` uses only an explicitly configured embedding endpoint and disposable local vector projections.
+- `hybrid` combines lexical and semantic ranks. If the optional provider or projection is unavailable, ART returns the unchanged lexical result and reports the fallback.
+
+Embedding is an optional adapter supplied and operated by the user. ART does not bundle, download, train, select, or make quality claims for a model merely because its endpoint is compatible.
 
 ## Quick start
 
@@ -42,14 +53,14 @@ does not edit Codex or DSH configuration. The thin Codex plugin lives under
 `codex-primary`. See [operations](docs/operations.md) before migrating or
 publishing knowledge.
 
-ART 0.2.0 adds BM25-first fusion, bounded result depth, and reproducible BEIR
-retrieval gates while preserving deterministic Knowledge Vault backup,
-encrypted recovery of local review authority, and verified empty-home
-restoration. See
+ART 0.3.0 adds progressive routing, governed full scan, and optional semantic
+and hybrid adapters while preserving deterministic Knowledge Vault backup,
+encrypted recovery of local review authority, verified empty-home restoration,
+and reproducible lexical BEIR gates. See
 [operations](docs/operations.md#backup-and-disaster-recovery) before creating
 the dedicated private Git repository.
 
-Configuration precedence is `--home`, then `--config <file>`, then the owner-only user config at `~/.across/config/art/config.json`, then the built-in `~/.across` root. ART config accepts only `schema` and `home`; credentials are deliberately unsupported.
+Configuration precedence is `--home`, then `--config <file>`, then the owner-only user config at `~/.across/config/art/config.json`, then the built-in `~/.across` root. The root config accepts only `schema` and `home`. Optional embedding configuration is isolated at `<ART_HOME>/config/art/embedding/default.json`; tokens, when needed, live in a separate owner-only file.
 
 ## Documentation
 

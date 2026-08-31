@@ -12,7 +12,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 manifest = json.loads((root / ".codex-plugin/plugin.json").read_text())
 assert manifest["name"] == "agent-recall-trail"
-assert manifest["version"] == "0.2.0"
+assert manifest["version"] == "0.3.0"
 assert manifest["skills"] == "./skills/"
 assert manifest["mcpServers"] == "./.mcp.json"
 assert manifest["interface"]["displayName"] == "Agent Recall Trail"
@@ -22,6 +22,8 @@ skill = (root / "skills/agent-recall-trail/SKILL.md").read_text()
 assert skill.startswith("---\nname: agent-recall-trail\n")
 assert "Basic Memory" not in skill
 assert "approve" in skill and "publish" in skill
+assert "full_scan" in skill and "semantic" in skill and "hybrid" in skill
+assert "optional" in skill
 policy = (root / "skills/agent-recall-trail/agents/openai.yaml").read_text()
 assert "allow_implicit_invocation: true" in policy
 PY

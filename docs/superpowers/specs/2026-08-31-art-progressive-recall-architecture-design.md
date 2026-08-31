@@ -4,7 +4,7 @@
 
 **Target release:** ART 0.3.0
 
-**Supersedes:** `2026-08-31-art-remote-semantic-retrieval-design.md`
+**Status:** Approved 0.3 architecture
 
 ## Purpose
 
@@ -169,8 +169,7 @@ Every Recall Bundle records:
 
 ## Optional embedding adapter
 
-ART defines a provider-neutral `EmbeddingProvider` boundary rather than a
-Qwen-specific product path. A provider supplies:
+ART defines a provider-neutral `EmbeddingProvider` boundary. A provider supplies:
 
 - a stable provider and model fingerprint;
 - vector dimensions and normalization declaration;
@@ -290,11 +289,9 @@ are provider-qualified evidence and never replace lexical/full-scan acceptance.
 
 ## Documentation migration
 
-The previous Qwen-specific remote semantic design and plan are retained only as
-historical experiment records and marked superseded. Implementation must update
-architecture, memory/knowledge, retrieval testing, operations, security,
-integration, changelog, and release documents together so no public surface
-describes embedding as required or as ART's primary 0.3 direction.
+Architecture, memory/knowledge, retrieval testing, operations, security,
+integration, changelog, and release documents are updated together so no public
+surface describes embedding as required or as ART's primary 0.3 direction.
 
 ## Non-goals
 

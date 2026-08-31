@@ -60,6 +60,7 @@ pub struct KnowledgeNavigationEntry {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct KnowledgeDiagnostics {
     pub integrity_ok: bool,
     pub foreign_key_violations: u64,
