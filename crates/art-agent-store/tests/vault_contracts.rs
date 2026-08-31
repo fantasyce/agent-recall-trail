@@ -142,6 +142,44 @@ fn ranked_search_keeps_bm25_order_and_broad_terms() {
 }
 
 #[test]
+fn navigation_projection_is_deterministic_agent_bound_and_epoch_stamped() {
+    let root = tempdir().unwrap();
+    let codex = AgentId::from_str("codex-primary").unwrap();
+    let dsh = AgentId::from_str("dsh-primary").unwrap();
+    let codex_vault = AgentVault::open(root.path().join("codex.sqlite3"), codex.clone()).unwrap();
+    let dsh_vault = AgentVault::open(root.path().join("dsh.sqlite3"), dsh.clone()).unwrap();
+    for (index, title) in ["Alpha recovery", "Beta release"].into_iter().enumerate() {
+        let item = ranked_memory(&codex, title, "navigation marker");
+        codex_vault
+            .capture(&item, &[anchor(&codex)], &format!("navigation-{index}"))
+            .unwrap();
+    }
+    let dsh_item = ranked_memory(&dsh, "DSH private", "must not cross lanes");
+    dsh_vault
+        .capture(&dsh_item, &[anchor(&dsh)], "navigation-dsh")
+        .unwrap();
+
+    assert_eq!(codex_vault.rebuild_navigation().unwrap(), 2);
+    let first = codex_vault.navigation_entries().unwrap();
+    let second = codex_vault.navigation_entries().unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 2);
+    assert!(first.iter().all(|entry| entry.agent_id == codex));
+    assert!(
+        first
+            .iter()
+            .all(|entry| entry.source_epoch == codex_vault.index_epoch().unwrap())
+    );
+    assert!(first.iter().all(|entry| entry.memory_id != dsh_item.id));
+    assert!(codex_vault.navigation_aligned().unwrap());
+    let late = ranked_memory(&codex, "Late change", "invalidates the map epoch");
+    codex_vault
+        .capture(&late, &[anchor(&codex)], "navigation-late")
+        .unwrap();
+    assert!(!codex_vault.navigation_aligned().unwrap());
+}
+
+#[test]
 fn a_mid_transaction_anchor_conflict_leaves_no_orphan_memory_or_revision() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();

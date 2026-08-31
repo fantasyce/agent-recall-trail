@@ -46,6 +46,19 @@ pub struct RankedEditionCandidate {
     pub lexical_rank: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeNavigationEntry {
+    pub edition_id: String,
+    pub knowledge_key: String,
+    pub edition_number: u32,
+    pub title: String,
+    pub applicability: String,
+    pub published_at: String,
+    pub current: bool,
+    pub usage_count: u64,
+    pub source_epoch: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeDiagnostics {
     pub integrity_ok: bool,
@@ -106,6 +119,8 @@ impl KnowledgeVault {
              CREATE TABLE IF NOT EXISTS event_intents (id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, edition_id TEXT NOT NULL, target_path TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS edition_projections (edition_id TEXT PRIMARY KEY, knowledge_key TEXT NOT NULL, edition_number INTEGER NOT NULL, title TEXT NOT NULL, markdown_path TEXT NOT NULL, manifest_path TEXT NOT NULL, markdown_sha256 TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, published_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, current INTEGER NOT NULL DEFAULT 1);
              CREATE TABLE IF NOT EXISTS knowledge_events (event_id TEXT PRIMARY KEY, event_hash TEXT NOT NULL, schema TEXT NOT NULL, edition_id TEXT NOT NULL, applied_at TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS knowledge_navigation (edition_id TEXT PRIMARY KEY, knowledge_key TEXT NOT NULL, edition_number INTEGER NOT NULL, title TEXT NOT NULL, applicability TEXT NOT NULL, published_at TEXT NOT NULL, current INTEGER NOT NULL, usage_count INTEGER NOT NULL DEFAULT 0, source_epoch TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS knowledge_navigation_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), source_epoch TEXT NOT NULL);
              CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(edition_id UNINDEXED,search_text,tokenize='unicode61');
              CREATE INDEX IF NOT EXISTS edition_current ON edition_projections(knowledge_key, current, revoked);",
         ).map_err(db_error)?;
@@ -566,6 +581,70 @@ impl KnowledgeVault {
             hasher.update(hash);
         }
         Ok(hex::encode(hasher.finalize()))
+    }
+
+    pub fn rebuild_navigation(&self) -> ArtResult<u64> {
+        let source_epoch = self.index_epoch()?;
+        let records = self.list_current()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(db_error)?;
+        transaction
+            .execute("DELETE FROM knowledge_navigation", [])
+            .map_err(db_error)?;
+        for record in &records {
+            let markdown = fs::read_to_string(&record.markdown_path).map_err(io_error)?;
+            let applicability =
+                edition_section(&markdown, "Applicability").ok_or(ArtError::IndexDegraded)?;
+            transaction.execute(
+                "INSERT INTO knowledge_navigation(edition_id,knowledge_key,edition_number,title,applicability,published_at,current,usage_count,source_epoch) VALUES (?1,?2,?3,?4,?5,?6,1,0,?7)",
+                params![record.edition_id,record.knowledge_key,record.edition_number,record.title,applicability,record.published_at,source_epoch],
+            ).map_err(db_error)?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO knowledge_navigation_meta(singleton,source_epoch) VALUES (1,?1) ON CONFLICT(singleton) DO UPDATE SET source_epoch=excluded.source_epoch",
+                [&source_epoch],
+            )
+            .map_err(db_error)?;
+        transaction.commit().map_err(db_error)?;
+        u64::try_from(records.len()).map_err(internal_error)
+    }
+
+    pub fn navigation_entries(&self) -> ArtResult<Vec<KnowledgeNavigationEntry>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT edition_id,knowledge_key,edition_number,title,applicability,published_at,current,usage_count,source_epoch FROM knowledge_navigation WHERE current=1 ORDER BY knowledge_key,edition_number DESC,edition_id",
+        ).map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(KnowledgeNavigationEntry {
+                    edition_id: row.get(0)?,
+                    knowledge_key: row.get(1)?,
+                    edition_number: row.get(2)?,
+                    title: row.get(3)?,
+                    applicability: row.get(4)?,
+                    published_at: row.get(5)?,
+                    current: row.get::<_, i64>(6)? != 0,
+                    usage_count: row.get(7)?,
+                    source_epoch: row.get(8)?,
+                })
+            })
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    pub fn navigation_aligned(&self) -> ArtResult<bool> {
+        let connection = self.connection()?;
+        let projected: Option<String> = connection
+            .query_row(
+                "SELECT source_epoch FROM knowledge_navigation_meta WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let canonical = self.index_epoch()?;
+        Ok(projected.as_deref() == Some(canonical.as_str()))
     }
 
     pub fn revoke(&self, id: &str, reason: &str, confirm: bool) -> ArtResult<()> {
@@ -1322,6 +1401,16 @@ fn search_document(markdown: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!("{normalized}\n{bigrams}")
+}
+
+fn edition_section(markdown: &str, heading: &str) -> Option<String> {
+    let marker = format!("## {heading}\n\n");
+    let body = markdown.split_once(&marker)?.1;
+    let section = body
+        .split_once("\n\n## ")
+        .map_or(body, |(section, _)| section)
+        .trim();
+    (!section.is_empty()).then(|| section.to_owned())
 }
 
 fn fts_expression(terms: &[String]) -> ArtResult<String> {

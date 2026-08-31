@@ -148,6 +148,48 @@ fn ranked_search_keeps_bm25_order_and_broad_terms() {
 }
 
 #[test]
+fn navigation_catalog_contains_only_current_editions_and_exact_applicability() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [42_u8; 32]).unwrap();
+    let first = publish_search_fixture(
+        &vault,
+        &agent,
+        "navigation.revoked",
+        "First release guide",
+        "first body",
+    );
+    let second = publish_search_fixture(
+        &vault,
+        &agent,
+        "navigation.current",
+        "Current release guide",
+        "current body",
+    );
+    vault
+        .revoke(&first.edition_id, "superseded fixture", true)
+        .unwrap();
+
+    assert_eq!(vault.rebuild_navigation().unwrap(), 1);
+    let entries = vault.navigation_entries().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].edition_id, second.edition_id);
+    assert_ne!(entries[0].edition_id, first.edition_id);
+    assert_eq!(entries[0].applicability, "local coding agents");
+    assert!(entries[0].current);
+    assert_eq!(entries[0].source_epoch, vault.index_epoch().unwrap());
+    assert!(vault.navigation_aligned().unwrap());
+    publish_search_fixture(
+        &vault,
+        &agent,
+        "navigation.late",
+        "Late catalog entry",
+        "invalidates the catalog epoch",
+    );
+    assert!(!vault.navigation_aligned().unwrap());
+}
+
+#[test]
 fn proposal_idempotency_replays_the_same_payload_and_rejects_a_conflict() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();

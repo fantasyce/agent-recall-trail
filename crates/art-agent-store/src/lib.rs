@@ -44,6 +44,21 @@ pub struct RankedMemoryCandidate {
     pub lexical_rank: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MemoryNavigationEntry {
+    pub memory_id: String,
+    pub agent_id: AgentId,
+    pub kind: String,
+    pub scope_type: String,
+    pub scope_key: String,
+    pub title: String,
+    pub status: String,
+    pub revision: u32,
+    pub updated_at: String,
+    pub usage_count: u64,
+    pub source_epoch: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryExportRecord {
     pub schema: String,
@@ -416,6 +431,119 @@ impl AgentVault {
             hasher.update(updated);
         }
         Ok(hex::encode(hasher.finalize()))
+    }
+
+    pub fn rebuild_navigation(&self) -> ArtResult<u64> {
+        let source_epoch = self.index_epoch()?;
+        let now = Utc::now();
+        let eligible: Vec<_> = self
+            .list()?
+            .into_iter()
+            .filter(|memory| {
+                memory.status == MemoryStatus::Active
+                    && memory.valid_from.is_none_or(|start| start <= now)
+                    && memory.valid_until.is_none_or(|end| end > now)
+            })
+            .collect();
+        let mut connection = open_connection(&self.path)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_db)?;
+        transaction
+            .execute("DELETE FROM memory_navigation", [])
+            .map_err(map_db)?;
+        for memory in &eligible {
+            transaction.execute(
+                "INSERT INTO memory_navigation(memory_id,agent_id,kind,scope_type,scope_key,title,status,revision,updated_at,usage_count,source_epoch) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,COALESCE((SELECT COUNT(*) FROM feedback_events WHERE subject_type='memory' AND subject_id=?1),0),?10)",
+                params![
+                    memory.id,
+                    self.agent_id.as_str(),
+                    memory.payload.kind_name(),
+                    scope_type(&memory.scope),
+                    scope_key(&memory.scope),
+                    memory.title,
+                    format!("{:?}", memory.status).to_lowercase(),
+                    memory.current_revision,
+                    memory.updated_at.to_rfc3339(),
+                    source_epoch,
+                ],
+            ).map_err(map_db)?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO memory_navigation_meta(singleton,source_epoch) VALUES (1,?1) ON CONFLICT(singleton) DO UPDATE SET source_epoch=excluded.source_epoch",
+                [&source_epoch],
+            )
+            .map_err(map_db)?;
+        transaction.commit().map_err(map_db)?;
+        u64::try_from(eligible.len()).map_err(|error| ArtError::Internal(error.to_string()))
+    }
+
+    pub fn navigation_entries(&self) -> ArtResult<Vec<MemoryNavigationEntry>> {
+        let connection = open_connection(&self.path)?;
+        let mut statement = connection.prepare(
+            "SELECT memory_id,agent_id,kind,scope_type,scope_key,title,status,revision,updated_at,usage_count,source_epoch FROM memory_navigation WHERE agent_id=?1 ORDER BY scope_key,title,memory_id",
+        ).map_err(map_db)?;
+        let rows = statement
+            .query_map([self.agent_id.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, u32>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, u64>(9)?,
+                    row.get::<_, String>(10)?,
+                ))
+            })
+            .map_err(map_db)?;
+        rows.map(|row| {
+            let (
+                memory_id,
+                agent_id,
+                kind,
+                scope_type,
+                scope_key,
+                title,
+                status,
+                revision,
+                updated_at,
+                usage_count,
+                source_epoch,
+            ) = row.map_err(map_db)?;
+            Ok(MemoryNavigationEntry {
+                memory_id,
+                agent_id: agent_id.parse()?,
+                kind,
+                scope_type,
+                scope_key,
+                title,
+                status,
+                revision,
+                updated_at,
+                usage_count,
+                source_epoch,
+            })
+        })
+        .collect()
+    }
+
+    pub fn navigation_aligned(&self) -> ArtResult<bool> {
+        let connection = open_connection(&self.path)?;
+        let projected: Option<String> = connection
+            .query_row(
+                "SELECT source_epoch FROM memory_navigation_meta WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(map_db)?;
+        let canonical = self.index_epoch()?;
+        Ok(projected.as_deref() == Some(canonical.as_str()))
     }
 
     pub fn search_ranked_candidates(
@@ -1084,7 +1212,9 @@ fn migrate(connection: &mut Connection, agent_id: &AgentId) -> ArtResult<()> {
          CREATE TABLE IF NOT EXISTS feedback_events (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, signal TEXT NOT NULL, safe_note TEXT, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS feedback_receipts (agent_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, payload_hash TEXT NOT NULL, feedback_id TEXT NOT NULL REFERENCES feedback_events(id), received_at TEXT NOT NULL, PRIMARY KEY(agent_id,idempotency_key));
          CREATE TABLE IF NOT EXISTS source_events (id TEXT PRIMARY KEY, anchor_id TEXT NOT NULL REFERENCES source_anchors(id), event_type TEXT NOT NULL, new_digest TEXT, actor TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS lifecycle_events (id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memory_artifacts(id), event_type TEXT NOT NULL, reason TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL);",
+         CREATE TABLE IF NOT EXISTS lifecycle_events (id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memory_artifacts(id), event_type TEXT NOT NULL, reason TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS memory_navigation (memory_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, scope_type TEXT NOT NULL, scope_key TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL, usage_count INTEGER NOT NULL DEFAULT 0, source_epoch TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS memory_navigation_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), source_epoch TEXT NOT NULL);",
     ).map_err(map_db)?;
     connection
         .execute_batch(
