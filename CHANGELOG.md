@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3 - 2026-09-07
+
+- Added an ART-owned loopback governance page for Codex Desktop and DSH settings, review, publication, status, and audit.
+- Added persistent, default-off delegation scoped to the canonical host binding plus Agent identity.
+- Added one exact `approve_and_publish` operation for an unambiguous current user instruction, with no Agent-controlled authority fields.
+- Added distinct `AgentDelegated` approval and publication receipts and direct Submitted-to-Materialized publication with no visible approved-only state.
+- Preserved separate MCP form Elicitation operations for compatible clients while removing human-facing terminal fallback from Codex and DSH guidance.
+- Expanded the bounded MCP surface to eight tools with `art_governance_ui_open`.
+
 ## 0.3.2 - 2026-09-06
 
 - Added `art_knowledge_governance` as the seventh Agent-safe MCP tool.

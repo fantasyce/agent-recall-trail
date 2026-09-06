@@ -12,7 +12,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 manifest = json.loads((root / ".codex-plugin/plugin.json").read_text())
 assert manifest["name"] == "agent-recall-trail"
-assert manifest["version"] == "0.3.2"
+assert manifest["version"] == "0.3.3"
 assert manifest["skills"] == "./skills/"
 assert manifest["mcpServers"] == "./.mcp.json"
 assert manifest["interface"]["displayName"] == "Agent Recall Trail"
@@ -47,8 +47,9 @@ for integration in [
 policy = (root / "skills/agent-recall-trail/agents/openai.yaml").read_text()
 assert "allow_implicit_invocation: true" in policy
 bundle_manifest = json.loads((root.parents[1] / "packaging/mcpb/manifest.json.in").read_text())
-assert len(bundle_manifest["tools"]) == 7
+assert len(bundle_manifest["tools"]) == 8
 assert "art_knowledge_governance" in {tool["name"] for tool in bundle_manifest["tools"]}
+assert "art_governance_ui_open" in {tool["name"] for tool in bundle_manifest["tools"]}
 PY
 
 python3 "$repo_root/tests/scripts/test_plugin_launch.py"

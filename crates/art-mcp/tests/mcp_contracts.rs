@@ -23,7 +23,7 @@ fn server() -> (tempfile::TempDir, ArtMcpServer) {
 }
 
 #[tokio::test]
-async fn mcp_discovers_optional_embedding_without_changing_the_seven_tool_surface() {
+async fn mcp_discovers_optional_embedding_without_changing_the_eight_tool_surface() {
     let root = tempdir().unwrap();
     let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
     let config_dir = root.path().join("config/art/embedding");

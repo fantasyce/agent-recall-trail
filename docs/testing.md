@@ -18,7 +18,12 @@ Contract tests cover:
 - provider-neutral embedding validation, owner-only runtime files, isolated
   epoch/fingerprint-bound semantic projections, resumable rebuild, semantic
   no-overlap retrieval, hybrid exact priority, and byte-equivalent lexical fallback;
-- seven-tool MCP success paths, strict object output schemas, form Elicitation review/publication separation, capability fallback, non-consent and malformed-response no-write behavior, revision staleness, DB busy, shutdown, no-persist rejection, legacy/current protocol initialization, JSON-only debug stdout, and EOF/signals;
+- eight-tool MCP success paths, strict object output schemas, loopback
+  governance sessions, persistent default-off delegation, atomic
+  `AgentDelegated` publication, form Elicitation compatibility, non-consent
+  and malformed-response no-write behavior, revision staleness, DB busy,
+  shutdown, no-persist rejection, legacy/current protocol initialization,
+  JSON-only debug stdout, and EOF/signals;
 - CLI confirmation boundaries, config priority, deep Doctor diagnostics, private permissions, integration previews, reviewable Markdown scan, safe copy, and import/export behavior;
 - thin Across Context contract expiry, no-persist, and invalidation behavior without an AAA adapter.
 
@@ -30,7 +35,9 @@ Acceptance uses task-owned storage and temporary opt-in configuration only:
 2. Codex secondary negative private recall.
 3. DSH primary health, capture, and recall.
 4. DSH secondary negative private recall.
-5. Codex proposal, separate local human review/publication Elicitations when supported (or direct CLI fallback when unsupported), then shared Edition recall from both secondary Agents.
+5. Codex proposal, ART local-page review/publication in `human_review` mode
+   and one-instruction `approve_and_publish` in `delegated_local`, then
+   shared Edition recall from both secondary Agents.
 6. Route, lexical recall, exact read, governed full scan, and unconfigured semantic/hybrid fallback in both hosts.
 7. Skill discovery and failure-boundary behavior in both hosts.
 8. Graceful EOF, abnormal disconnect, concurrency, repeated-query, file-permission, source-read-only, and residue checks.

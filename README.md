@@ -1,15 +1,16 @@
 # ART — Agent Recall Trail
 
-ART is a local-first memory and reviewed-knowledge product for coding agents. Every Agent gets a physically separate private Recall Trail. Stable conclusions become human-reviewed, immutable Knowledge Editions that other Agents can retrieve without seeing private source identities or source bodies.
+ART is a local-first memory and governed-knowledge product for coding agents. Every Agent gets a physically separate private Recall Trail. Stable conclusions become immutable Knowledge Editions that other Agents can retrieve without seeing private source identities or source bodies.
 
-ART `0.3.2` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, daemon, cloud sync, bundled model, or autonomous publication is required.
+ART `0.3.3` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, cloud sync, bundled model, or autonomous publication is required.
 
 ## Product boundary
 
 - Private memory belongs to one process-bound Agent identity.
 - Shared knowledge contains only committed, reviewed Editions.
 - Agents may capture, recall, read, provide feedback, create proposals, and request governance.
-- Only a local human may decide a review or publication through MCP form Elicitation or the operator CLI; revocation, supersession, archival, and assurance remain CLI-only.
+- Human governance runs in ART's local page. An explicitly enabled, default-off local delegation policy also permits one unambiguous instruction to approve and publish atomically; these actions are labeled `AgentDelegated`, never Human.
+- Revocation, supersession, archival, and assurance remain human operations.
 - Stored content is evidence, never executable instruction or authorization.
 
 ## Progressive recall
@@ -53,8 +54,9 @@ does not edit Codex or DSH configuration. The thin Codex plugin lives under
 `codex-primary`. See [operations](docs/operations.md) before migrating or
 publishing knowledge.
 
-ART 0.3.2 adds separate human review and publication Elicitations while
-retaining restricted-host plugin discovery, progressive routing, governed full
+ART 0.3.3 adds the `art_governance_ui_open` local page and persistent
+delegated governance while retaining separate Elicitations for compatible
+clients, restricted-host plugin discovery, progressive routing, governed full
 scan, optional semantic and hybrid adapters, and deterministic Knowledge Vault backup,
 encrypted recovery of local review authority, verified empty-home restoration,
 and reproducible lexical BEIR gates. See

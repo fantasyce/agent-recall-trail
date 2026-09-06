@@ -76,8 +76,13 @@ semantic path with a safe diagnostic; it never silently changes ranking.
 1. Agent captures sourced private memory.
 2. Human assures, disputes, supersedes, or archives through `art memory` commands.
 3. Agent creates a knowledge proposal from exact memory references.
-4. Agent may request review through `art_knowledge_governance`; a supporting MCP client presents the exact proposal and obtains the human decision and reason through form Elicitation. Otherwise the human uses the CLI fallback directly.
-5. After approval, publication requires a second `art_knowledge_governance` Elicitation or a separate CLI `--confirm` action. Ordinary chat is never consent, and the Agent must not run fallback review or publication commands for the user.
+4. In default-off `human_review` mode, the Agent calls
+   `art_governance_ui_open` and the host opens ART's local page. The human
+   reviews and publishes there; status and audit remain on the same page.
+5. In `delegated_local` mode, one unambiguous current user instruction allows
+   one `approve_and_publish` call. ART derives authority fields, moves directly
+   from Submitted to Materialized, and records linked `AgentDelegated`
+   receipts. Full Access alone never enables delegation.
 6. Human verifies or revokes an Edition. Existing Edition files remain immutable.
 
 ## Import and export
@@ -87,10 +92,11 @@ semantic path with a safe diagnostic; it never silently changes ranking.
 After a human reviews one exact Markdown file, `art knowledge proposal
 compose-file` creates a `FileSnapshot`-locked proposal. It requires the
 expected SHA-256 and rejects symbolic links, hard links, non-Markdown files,
-unsafe source identifiers, and digest mismatches. Separate human review and
-publication decisions remain mandatory. They may be collected by MCP form
-Elicitation for an Agent-created Proposal; otherwise the human runs
-`knowledge review approve` and `knowledge publish --confirm` directly.
+unsafe source identifiers, and digest mismatches. Human review and publication
+are completed in the ART local governance page. On compatible non-Codex/DSH
+clients, the existing separate MCP form Elicitations remain available. When
+persistent delegation is enabled for the bound Agent and host, one unambiguous
+user instruction may instead use the atomic delegated operation.
 
 For a complete reviewed tree, `scripts/migrate_markdown_knowledge.py` stages
 the deterministic scan, composes each file separately, invokes the same human
