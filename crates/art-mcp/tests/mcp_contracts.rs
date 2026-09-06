@@ -107,8 +107,7 @@ fn tool_surface_is_exactly_seven_agent_safe_tools() {
         assert!(properties.get(forbidden).is_none(), "exposed {forbidden}");
     }
     assert_eq!(
-        governance["inputSchema"]["additionalProperties"],
-        false,
+        governance["inputSchema"]["additionalProperties"], false,
         "Agent governance input must reject undeclared authority fields"
     );
 }

@@ -7,6 +7,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use art_agent_store::AgentVault;
@@ -14,8 +15,13 @@ use art_domain::{
     ArtError, ArtResult,
     agent::{AgentId, ArtPaths},
     anchor::{AnchorKind, SourceAnchor},
-    knowledge::{KnowledgeDraft, ProposalSourceLock, ProposalSourceType},
-    memory::{MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity},
+    knowledge::{
+        KnowledgeDraft, KnowledgeProposal, ProposalSourceLock, ProposalSourceType, ProposalStatus,
+        ReviewActor, RiskLevel,
+    },
+    memory::{
+        MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity, canonical_json_hash,
+    },
 };
 use art_knowledge::KnowledgeVault;
 use art_retrieval::{
@@ -25,8 +31,9 @@ use art_retrieval::{
 };
 use chrono::Utc;
 use rmcp::{
-    Json, ServerHandler, ServiceExt,
+    Json, Peer, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    service::ElicitationError,
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -117,6 +124,48 @@ pub struct KnowledgeGovernanceInput {
     pub operation: KnowledgeGovernanceOperation,
     pub proposal_id: String,
     pub revision: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReviewElicitationResponse {
+    #[schemars(extend("enum" = ["approve", "request_changes", "reject"]))]
+    decision: String,
+    #[schemars(length(min = 1, max = 1000))]
+    reason: String,
+}
+
+rmcp::elicit_safe!(ReviewElicitationResponse);
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PublishElicitationResponse {
+    confirm: bool,
+}
+
+rmcp::elicit_safe!(PublishElicitationResponse);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProposalSnapshot {
+    id: String,
+    revision: u32,
+    status: ProposalStatus,
+    source_set_hash: String,
+    draft_hash: String,
+}
+
+impl ProposalSnapshot {
+    fn from_proposal(proposal: &KnowledgeProposal) -> Result<Self, String> {
+        let draft = serde_json::to_value(&proposal.draft)
+            .map_err(|error| tool_error(ArtError::Internal(error.to_string())))?;
+        Ok(Self {
+            id: proposal.id.clone(),
+            revision: proposal.revision,
+            status: proposal.status,
+            source_set_hash: proposal.source_set_hash.clone(),
+            draft_hash: canonical_json_hash(&draft),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -414,10 +463,33 @@ impl ArtMcpServer {
     )]
     pub async fn art_knowledge_governance(
         &self,
-        Parameters(_input): Parameters<KnowledgeGovernanceInput>,
+        Parameters(input): Parameters<KnowledgeGovernanceInput>,
+        peer: Peer<RoleServer>,
     ) -> Result<Json<ToolOutput>, String> {
         self.ensure_running().map_err(tool_error)?;
-        Err(tool_error(ArtError::InvalidStateTransition))
+        let proposal = self
+            .knowledge_vault
+            .proposal(&input.proposal_id)
+            .map_err(tool_error)?;
+        if proposal.revision != input.revision || proposal.status == ProposalStatus::Stale {
+            return governance_output(
+                &input,
+                "operator_action_required",
+                Some("SOURCE_STALE"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        let snapshot = ProposalSnapshot::from_proposal(&proposal)?;
+        match input.operation {
+            KnowledgeGovernanceOperation::Review => {
+                self.review_by_elicitation(&input, &proposal, &snapshot, &peer)
+                    .await
+            }
+            KnowledgeGovernanceOperation::Publish => {
+                self.publish_by_elicitation(&input, &proposal, &snapshot, &peer)
+                    .await
+            }
+        }
     }
 
     #[tool(
@@ -500,6 +572,317 @@ impl ArtMcpServer {
             json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status}),
         )?))
     }
+}
+
+impl ArtMcpServer {
+    async fn review_by_elicitation(
+        &self,
+        input: &KnowledgeGovernanceInput,
+        proposal: &KnowledgeProposal,
+        snapshot: &ProposalSnapshot,
+        peer: &Peer<RoleServer>,
+    ) -> Result<Json<ToolOutput>, String> {
+        if matches!(proposal.draft.risk, RiskLevel::Elevated | RiskLevel::High)
+            && proposal.status == ProposalStatus::UnderReview
+        {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("INDEPENDENT_REVIEW_REQUIRED"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        let message = format!(
+            "Review this exact ART Knowledge Proposal.\n\nProposal ID: {}\nRevision: {}\nKnowledge key: {}\nTitle: {}\nApplicability: {}\nSensitivity: {:?}\nRisk: {:?}\nSource-set hash: {}\nDraft hash: {}\n\nComplete proposed Markdown:\n\n{}\n\nChoose approve, request_changes, or reject and provide a required reason (1-1000 characters).",
+            proposal.id,
+            proposal.revision,
+            proposal.draft.knowledge_key,
+            proposal.draft.title,
+            proposal.draft.applicability,
+            proposal.draft.sensitivity,
+            proposal.draft.risk,
+            proposal.source_set_hash,
+            snapshot.draft_hash,
+            proposal.draft.markdown,
+        );
+        let response = match peer
+            .elicit_with_timeout::<ReviewElicitationResponse>(
+                message,
+                Some(Duration::from_secs(300)),
+            )
+            .await
+        {
+            Ok(Some(response)) => response,
+            Ok(None) | Err(ElicitationError::NoContent) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("ELICITATION_NO_CONTENT"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserDeclined) => {
+                return governance_output(
+                    input,
+                    "declined",
+                    Some("USER_DECLINED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserCancelled) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("USER_CANCELLED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::CapabilityNotSupported) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_UNSUPPORTED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::ParseError { .. }) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INVALID_RESPONSE"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(_) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INTERRUPTED"),
+                    json!({"proposal_status": proposal.status, "retryable": true}),
+                );
+            }
+        };
+        let reason = response.reason.trim();
+        if reason.is_empty() || reason.chars().count() > 1000 {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("ELICITATION_INVALID_RESPONSE"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        if !self.snapshot_matches(snapshot)? {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("SOURCE_STALE"),
+                json!({"proposal_status": "stale"}),
+            );
+        }
+        let decision = match response.decision.as_str() {
+            "approve" => "approved",
+            "request_changes" => "changes_requested",
+            "reject" => "rejected",
+            _ => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INVALID_RESPONSE"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+        };
+        self.knowledge_vault
+            .review(
+                &proposal.id,
+                proposal.revision,
+                ReviewActor::Human(elicitation_actor(peer, &self.agent_id)),
+                decision,
+                reason,
+            )
+            .map_err(tool_error)?;
+        let updated = self
+            .knowledge_vault
+            .proposal(&proposal.id)
+            .map_err(tool_error)?;
+        if updated.status == ProposalStatus::UnderReview {
+            governance_output(
+                input,
+                "operator_action_required",
+                Some("INDEPENDENT_REVIEW_REQUIRED"),
+                json!({"proposal_status": updated.status}),
+            )
+        } else {
+            governance_output(
+                input,
+                "reviewed",
+                None,
+                json!({"proposal_status": updated.status}),
+            )
+        }
+    }
+
+    async fn publish_by_elicitation(
+        &self,
+        input: &KnowledgeGovernanceInput,
+        proposal: &KnowledgeProposal,
+        snapshot: &ProposalSnapshot,
+        peer: &Peer<RoleServer>,
+    ) -> Result<Json<ToolOutput>, String> {
+        if proposal.status != ProposalStatus::Approved {
+            return Err(tool_error(ArtError::InvalidStateTransition));
+        }
+        let message = format!(
+            "Confirm publication of this exact approved ART Knowledge Proposal as a shared immutable Edition.\n\nProposal ID: {}\nRevision: {}\nKnowledge key: {}\nTitle: {}\nSource-set hash: {}\nDraft hash: {}\n\nComplete approved Markdown:\n\n{}\n\nSet confirm=true only if this exact approved content should be published.",
+            proposal.id,
+            proposal.revision,
+            proposal.draft.knowledge_key,
+            proposal.draft.title,
+            proposal.source_set_hash,
+            snapshot.draft_hash,
+            proposal.draft.markdown,
+        );
+        let response = match peer
+            .elicit_with_timeout::<PublishElicitationResponse>(
+                message,
+                Some(Duration::from_secs(300)),
+            )
+            .await
+        {
+            Ok(Some(response)) => response,
+            Ok(None) | Err(ElicitationError::NoContent) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("ELICITATION_NO_CONTENT"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserDeclined) => {
+                return governance_output(
+                    input,
+                    "declined",
+                    Some("USER_DECLINED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserCancelled) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("USER_CANCELLED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::CapabilityNotSupported) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_UNSUPPORTED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::ParseError { .. }) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INVALID_RESPONSE"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(_) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INTERRUPTED"),
+                    json!({"proposal_status": proposal.status, "retryable": true}),
+                );
+            }
+        };
+        if !response.confirm {
+            return governance_output(
+                input,
+                "declined",
+                Some("PUBLICATION_NOT_CONFIRMED"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        if !self.snapshot_matches(snapshot)? {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("SOURCE_STALE"),
+                json!({"proposal_status": "stale"}),
+            );
+        }
+        let edition = self
+            .knowledge_vault
+            .publish(&proposal.id, proposal.revision, true)
+            .map_err(tool_error)?;
+        governance_output(
+            input,
+            "published",
+            None,
+            json!({
+                "proposal_status": "materialized",
+                "edition_id": edition.edition_id,
+                "edition_number": edition.edition_number,
+                "knowledge_key": edition.knowledge_key,
+                "markdown_sha256": edition.markdown_sha256,
+                "manifest_sha256": edition.manifest_sha256,
+            }),
+        )
+    }
+
+    fn snapshot_matches(&self, snapshot: &ProposalSnapshot) -> Result<bool, String> {
+        let current = self
+            .knowledge_vault
+            .proposal(&snapshot.id)
+            .map_err(tool_error)?;
+        Ok(ProposalSnapshot::from_proposal(&current)? == *snapshot)
+    }
+}
+
+fn elicitation_actor(peer: &Peer<RoleServer>, agent_id: &AgentId) -> String {
+    let client = peer.peer_info().map(|info| {
+        json!({
+            "name": info.client_info.name,
+            "version": info.client_info.version,
+        })
+    });
+    let identity = canonical_json_hash(&json!({
+        "agent_id": agent_id.as_str(),
+        "client": client,
+        "transport": "local_mcp_elicitation",
+    }));
+    format!("mcp-elicitation:{}", &identity[..16])
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn governance_output(
+    input: &KnowledgeGovernanceInput,
+    outcome: &str,
+    reason_code: Option<&str>,
+    extra: Value,
+) -> Result<Json<ToolOutput>, String> {
+    let operation = match input.operation {
+        KnowledgeGovernanceOperation::Review => "review",
+        KnowledgeGovernanceOperation::Publish => "publish",
+    };
+    let mut value = json!({
+        "schema": "art.mcp.v1",
+        "operation": operation,
+        "proposal_id": input.proposal_id,
+        "revision": input.revision,
+        "outcome": outcome,
+    });
+    if let Some(reason_code) = reason_code {
+        value["reason_code"] = json!(reason_code);
+    }
+    if let (Some(target), Some(source)) = (value.as_object_mut(), extra.as_object()) {
+        target.extend(source.clone());
+    }
+    Ok(Json(ToolOutput::from_value(value)?))
 }
 
 pub async fn run_stdio_server(server: ArtMcpServer) -> ArtResult<()> {
