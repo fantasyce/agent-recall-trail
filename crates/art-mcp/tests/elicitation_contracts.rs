@@ -165,6 +165,43 @@ impl Harness {
         }
     }
 
+    async fn start_delegated() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
+        let mut server = ArtMcpServer::open(
+            &paths,
+            AgentId::from_str("codex-primary").unwrap(),
+            [51; 32],
+        )
+        .unwrap();
+        server.test_only_set_delegation_mode(true).unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let handler = ElicitationClient {
+            responses: Arc::new(Mutex::new(VecDeque::new())),
+            requests: Arc::clone(&requests),
+            supports_elicitation: false,
+            empty_elicitation_capability: false,
+            stale_on_request: None,
+            hang_on_request: None,
+            private_db: root
+                .path()
+                .join("data/art/agents/codex-primary/art.sqlite3"),
+        };
+        let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            let running = server.serve(server_transport).await?;
+            running.waiting().await?;
+            Ok(())
+        });
+        let client = handler.serve(client_transport).await.unwrap();
+        Self {
+            root,
+            client,
+            requests,
+            server_task,
+        }
+    }
+
     async fn call(&self, name: &str, arguments: Value) -> Value {
         let arguments = arguments.as_object().unwrap().clone();
         let result = self
@@ -329,6 +366,58 @@ impl Harness {
             .await;
         assert_eq!(revised["revision"], revision + 1);
     }
+}
+
+#[tokio::test]
+async fn delegated_governance_publishes_without_elicitation_and_is_distinctly_labeled() {
+    let harness = Harness::start_delegated().await;
+    let (proposal_id, revision) = harness.proposal().await;
+
+    let health = harness.call("art_health", json!({})).await;
+    assert_eq!(health["governance_mode"], "delegated_local");
+    let result = harness
+        .call(
+            "art_knowledge_governance",
+            json!({
+                "operation":"approve_and_publish",
+                "proposal_id":proposal_id,
+                "revision":revision
+            }),
+        )
+        .await;
+
+    assert_eq!(result["outcome"], "published", "{result}");
+    assert_eq!(result["actor_type"], "agent_delegated");
+    assert_eq!(result["proposal_status"], "materialized");
+    assert!(result["edition_id"].as_str().unwrap().starts_with("arke_"));
+    assert!(harness.requests.lock().unwrap().is_empty());
+    assert_eq!(harness.edition_count(), 1);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn delegated_governance_fails_closed_when_persistent_policy_is_disabled() {
+    let harness = Harness::start(false, vec![]).await;
+    let (proposal_id, revision) = harness.proposal().await;
+
+    let health = harness.call("art_health", json!({})).await;
+    assert_eq!(health["governance_mode"], "human_review");
+    let result = harness
+        .call(
+            "art_knowledge_governance",
+            json!({
+                "operation":"approve_and_publish",
+                "proposal_id":proposal_id,
+                "revision":revision
+            }),
+        )
+        .await;
+
+    assert_eq!(result["outcome"], "operator_action_required");
+    assert_eq!(result["reason_code"], "DELEGATION_DISABLED");
+    assert_eq!(harness.edition_count(), 0);
+    assert!(harness.requests.lock().unwrap().is_empty());
+    harness.stop().await;
 }
 
 #[tokio::test]

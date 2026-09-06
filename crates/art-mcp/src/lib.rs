@@ -16,14 +16,14 @@ use art_domain::{
     agent::{AgentId, ArtPaths},
     anchor::{AnchorKind, SourceAnchor},
     knowledge::{
-        KnowledgeDraft, KnowledgeProposal, ProposalSourceLock, ProposalSourceType, ProposalStatus,
-        ReviewActor, RiskLevel,
+        DelegatedAuthorizationBasis, KnowledgeDraft, KnowledgeProposal, ProposalSourceLock,
+        ProposalSourceType, ProposalStatus, ReviewActor, RiskLevel,
     },
     memory::{
         MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity, canonical_json_hash,
     },
 };
-use art_knowledge::{GovernanceSnapshot, KnowledgeVault};
+use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use art_retrieval::{
     EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RankFusionPolicy, RecallDetail,
     RecallEngine, RecallRequest, RetrievalMode, SemanticRuntime, knowledge_semantic_path,
@@ -117,6 +117,7 @@ pub struct KnowledgeProposeInput {
 pub enum KnowledgeGovernanceOperation {
     Review,
     Publish,
+    ApproveAndPublish,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -244,6 +245,20 @@ impl ArtMcpServer {
     #[doc(hidden)]
     pub fn test_only_set_elicitation_timeout(&mut self, timeout: Duration) {
         self.elicitation_timeout = timeout;
+    }
+
+    #[doc(hidden)]
+    pub fn test_only_set_delegation_mode(&mut self, enabled: bool) -> ArtResult<()> {
+        self.knowledge_vault.set_delegation_mode(
+            &self.agent_id,
+            &self.host_binding,
+            if enabled {
+                DelegationMode::DelegatedLocal
+            } else {
+                DelegationMode::HumanReview
+            },
+            "local_governance_ui",
+        )
     }
 
     #[tool(
@@ -486,6 +501,43 @@ impl ArtMcpServer {
                 self.publish_by_elicitation(&input, &proposal, &snapshot, &peer)
                     .await
             }
+            KnowledgeGovernanceOperation::ApproveAndPublish => {
+                if self
+                    .knowledge_vault
+                    .delegation_mode(&self.agent_id, &self.host_binding)
+                    .map_err(tool_error)?
+                    != DelegationMode::DelegatedLocal
+                {
+                    return governance_output(
+                        &input,
+                        "operator_action_required",
+                        Some("DELEGATION_DISABLED"),
+                        json!({"proposal_status": proposal.status}),
+                    );
+                }
+                let actor = ReviewActor::agent_delegated(
+                    self.agent_id.clone(),
+                    self.host_binding.clone(),
+                    DelegatedAuthorizationBasis::CurrentUserInstruction,
+                )
+                .map_err(tool_error)?;
+                let edition = self
+                    .knowledge_vault
+                    .approve_and_publish_delegated_exact(&snapshot, actor, &self.host_binding)
+                    .map_err(tool_error)?;
+                governance_output(
+                    &input,
+                    "published",
+                    None,
+                    json!({
+                        "proposal_status": ProposalStatus::Materialized,
+                        "edition_id": edition.edition_id,
+                        "edition_number": edition.edition_number,
+                        "knowledge_key": edition.knowledge_key,
+                        "actor_type": "agent_delegated",
+                    }),
+                )
+            }
         }
     }
 
@@ -565,8 +617,12 @@ impl ArtMcpServer {
             "degraded"
         };
         let vector_status = self.recall_engine.vector_status();
+        let governance_mode = self
+            .knowledge_vault
+            .delegation_mode(&self.agent_id, &self.host_binding)
+            .map_err(tool_error)?;
         Ok(Json(ToolOutput::from_value(
-            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status}),
+            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status,"governance_mode":governance_mode}),
         )?))
     }
 }
@@ -1001,6 +1057,7 @@ fn governance_output(
     let operation = match input.operation {
         KnowledgeGovernanceOperation::Review => "review",
         KnowledgeGovernanceOperation::Publish => "publish",
+        KnowledgeGovernanceOperation::ApproveAndPublish => "approve_and_publish",
     };
     let mut value = json!({
         "schema": "art.mcp.v1",
