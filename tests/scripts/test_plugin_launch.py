@@ -143,7 +143,7 @@ class PluginLaunchTests(unittest.TestCase):
             tools = self.request(process, 2, "tools/list", {})["tools"]
             names = {tool["name"] for tool in tools}
             self.assertEqual(names, {
-                "art_feedback", "art_health", "art_knowledge_propose",
+                "art_feedback", "art_health", "art_knowledge_governance", "art_knowledge_propose",
                 "art_memory_capture", "art_read", "art_recall",
             })
             # A skill naming an unavailable operation is a broken consumer contract.

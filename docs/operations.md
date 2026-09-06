@@ -76,8 +76,8 @@ semantic path with a safe diagnostic; it never silently changes ranking.
 1. Agent captures sourced private memory.
 2. Human assures, disputes, supersedes, or archives through `art memory` commands.
 3. Agent creates a knowledge proposal from exact memory references.
-4. Human inspects the proposal and sources, then approves, requests changes, or rejects.
-5. Human publishes with `--confirm`.
+4. Agent may request review through `art_knowledge_governance`; a supporting MCP client presents the exact proposal and obtains the human decision and reason through form Elicitation. Otherwise the human uses the CLI fallback directly.
+5. After approval, publication requires a second `art_knowledge_governance` Elicitation or a separate CLI `--confirm` action. Ordinary chat is never consent, and the Agent must not run fallback review or publication commands for the user.
 6. Human verifies or revokes an Edition. Existing Edition files remain immutable.
 
 ## Import and export
@@ -87,9 +87,10 @@ semantic path with a safe diagnostic; it never silently changes ranking.
 After a human reviews one exact Markdown file, `art knowledge proposal
 compose-file` creates a `FileSnapshot`-locked proposal. It requires the
 expected SHA-256 and rejects symbolic links, hard links, non-Markdown files,
-unsafe source identifiers, and digest mismatches. The separate human
-`knowledge review approve` and `knowledge publish --confirm` steps remain
-mandatory; the MCP surface never exposes them.
+unsafe source identifiers, and digest mismatches. Separate human review and
+publication decisions remain mandatory. They may be collected by MCP form
+Elicitation for an Agent-created Proposal; otherwise the human runs
+`knowledge review approve` and `knowledge publish --confirm` directly.
 
 For a complete reviewed tree, `scripts/migrate_markdown_knowledge.py` stages
 the deterministic scan, composes each file separately, invokes the same human

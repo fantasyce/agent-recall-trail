@@ -405,13 +405,13 @@ async fn feedback_idempotency_replays_and_conflicting_payload_is_rejected() {
 }
 
 #[tokio::test]
-async fn every_agent_safe_tool_has_a_success_path_and_stale_reads_fail_closed() {
+async fn original_six_agent_safe_tools_keep_success_paths_and_stale_reads_fail_closed() {
     let (_root, server) = server();
     let captured = server
         .art_memory_capture(Parameters(MemoryCaptureInput {
             memory_id: None,
             expected_revision: None,
-            title: "Six tools".into(),
+            title: "Original six tools".into(),
             summary: "六个工具都必须通过真实调用".into(),
             payload: MemoryPayload::Procedure(ProcedurePayload {
                 prerequisites: vec!["ART 已初始化".into()],
@@ -429,7 +429,7 @@ async fn every_agent_safe_tool_has_a_success_path_and_stale_reads_fail_closed() 
                 locator: "test:all-tools".into(),
                 source_version: None,
                 source_digest: Some("sha256:all-tools".into()),
-                excerpt: Some("six tool contract".into()),
+                excerpt: Some("original six-tool contract".into()),
                 metadata: json!({"exit_code":0,"output_hash":"all-tools"}),
             }],
             unanchored_candidate: false,
@@ -458,10 +458,10 @@ async fn every_agent_safe_tool_has_a_success_path_and_stale_reads_fail_closed() 
     assert!(stale.contains("ART_NOT_FOUND"));
     let proposed = server
         .art_knowledge_propose(Parameters(KnowledgeProposeInput {
-            knowledge_key: "mcp.six-tools".into(),
-            title: "Six tool contract".into(),
+            knowledge_key: "mcp.original-six-tools".into(),
+            title: "Original six-tool contract".into(),
             applicability: "MCP conformance".into(),
-            markdown: "All six tools were invoked through the bound server.".into(),
+            markdown: "The original six tools were invoked through the bound server.".into(),
             sensitivity: Sensitivity::Internal,
             source_refs: vec![format!("memory:{memory_id}@1")],
             idempotency_key: "all-tools-proposal".into(),

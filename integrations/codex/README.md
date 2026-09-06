@@ -11,10 +11,17 @@ outside these locations need an absolute MCP command path.
 
 Installing the skill alone supplies instructions; installing and enabling the
 plugin also registers its MCP server. Verify the actual host connection and
-six-tool discovery before claiming integration works. A successful standalone
+seven-tool discovery before claiming integration works. A successful standalone
 `art` command does not prove that a running Codex task has connected. After
 changing plugin files, refresh the host's plugin/skill discovery cache before
 reloading its MCP configuration; an MCP reload alone can reuse the old plugin
 command. Verify the connection on the next active turn or a fresh session.
 
 Codex may require approval for MCP calls depending on its active approval policy. For isolated automated acceptance only, run Codex in a task-owned directory and explicit no-approval mode. Do not weaken a normal user's policy just to make ART calls silent.
+
+ART 0.3.2 exposes `art_knowledge_governance`. If the connected Codex version
+advertises MCP form Elicitation, proposal review and publication appear as two
+separate human interactions. If it does not, ART returns
+`ELICITATION_UNSUPPORTED` without changing proposal state; the user must use
+the CLI fallback directly. An ordinary chat answer is never an approval or a
+publication confirmation.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2 - 2026-09-06
+
+- Added `art_knowledge_governance` as the seventh Agent-safe MCP tool.
+- Added separate MCP form Elicitations for human proposal review and immutable Edition publication.
+- Kept decisions, reasons, reviewer identity, and publication confirmation out of Agent-controlled tool arguments.
+- Added exact Proposal snapshot revalidation, stable unsupported-client fallback, non-consent handling, replay protection, and unchanged independent-review requirements for elevated knowledge.
+- Added protocol-level paired-client coverage and updated Codex/DSH guidance to prohibit treating ordinary chat as approval or executing CLI fallback decisions for the user.
+
 ## 0.3.1 - 2026-09-06
 
 - Fixed Codex plugin startup when GUI or restricted SSH hosts omit the user-local executable directory from `PATH`.

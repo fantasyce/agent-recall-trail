@@ -8,14 +8,14 @@ ART separates private experience from shared knowledge instead of treating them 
 2. `art-agent-store` owns one SQLite file per Agent. The database stores revisions, versioned/digested anchors, assurance decisions, relations, idempotent feedback, source changes, and lifecycle events.
 3. `art-knowledge` owns a private control store and a shareable Edition tree. Proposals and source locks remain private; Edition Markdown and manifests contain commitments only.
 4. `art-retrieval` implements one progressive recall pipeline over private and shared lanes. It uses rebuildable navigation, lexical, and optional semantic projections while canonical Agent artifacts and immutable shared files/events remain authoritative.
-5. `art-mcp` binds one Agent identity at process start and exposes exactly six Agent-safe tools over stdio.
+5. `art-mcp` binds one Agent identity at process start and exposes exactly seven Agent-safe tools over stdio, including a governance request that obtains authority only from MCP form Elicitation.
 6. `art-cli` exposes human operations, diagnostics, integration previews, import/export, and reindex entry points.
 
 ## Trust flow
 
 Capture begins as Candidate. A deterministic sourced capture may become Active, but Active means eligible for recall—not proven truth. An exact `memory_id` plus `expected_revision` creates a new immutable revision transactionally. Assurance decisions bind an exact memory revision and anchor-set hash. Source digest/revocation events make affected memory disputed and stale for proposals. Dispute, supersede, and archive preserve the old artifact and append an event.
 
-An Agent proposal locks exact source revisions and hashes. A local human reviews the proposal. Publication requires a matching current approval and writes a new immutable Edition plus a redacted manifest. A recoverable intent spans the SQLite/filesystem boundary: partial files are quarantined, complete hash-valid files are projected, and only committed projections are recallable. Immutable revocation/replacement events are reconciled on startup.
+An Agent proposal locks exact source revisions and hashes. A local human reviews the proposal through form Elicitation or the operator CLI. Publication is a separate confirmation, requires a matching current approval, and writes a new immutable Edition plus a redacted manifest. The Agent-facing governance input contains no decision, reason, actor, or confirmation field. A recoverable intent spans the SQLite/filesystem boundary: partial files are quarantined, complete hash-valid files are projected, and only committed projections are recallable. Immutable revocation/replacement events are reconciled on startup.
 
 ## Physical layout
 

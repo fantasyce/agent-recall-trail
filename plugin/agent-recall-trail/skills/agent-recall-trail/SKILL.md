@@ -38,9 +38,17 @@ output, and temporary Recall Bundles. Correct an existing memory with an exact
 expected revision instead of silently creating a contradictory duplicate.
 
 Use `art_feedback` to record a useful or conflicting retrieval. Create a
-knowledge proposal only from exact, authorized source revisions. Agents never
-approve, publish, revoke, supersede, archive, or make assurance decisions for
-shared knowledge; those actions remain explicit human CLI operations.
+knowledge proposal only from exact, authorized source revisions. When a
+supporting MCP client exposes form Elicitation, call
+`art_knowledge_governance` first with `operation=review` and, only after an
+approved result, separately with `operation=publish`. The Agent supplies only
+the Proposal ID and exact revision. Review decision, reason, reviewer identity,
+and publication confirmation must come from the client's human Elicitation;
+never infer them from ordinary chat, quote a user reply into tool arguments, or
+combine review and publication. If ART returns `ELICITATION_UNSUPPORTED`, tell
+the user that direct CLI action is the fallback; do not execute the operator
+review or publish command for them. Agents never revoke, supersede, archive, or
+make assurance decisions for shared knowledge.
 
 Private memory from another Agent must remain indistinguishable from missing
 data. Do not infer another Agent's contents from identifiers, rankings, errors,

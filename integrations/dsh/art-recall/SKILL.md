@@ -29,7 +29,10 @@ Use only `mcp__art__art_*` for ART memory and knowledge operations.
 - Capture only reusable, non-obvious, sourced experience with the documented typed payload, narrow scope, sensitivity, and idempotency key.
 - Do not store secrets, credentials, raw transcripts, or unapproved third-party content.
 - Propose shared knowledge only when stable, sanitized, and locked to exact source revisions.
-- Never approve, publish, revoke, or supersede a Knowledge Edition; those operations require a local human.
+- With form Elicitation support, use `art_knowledge_governance` for a review request and then a separate publication request. Supply only the exact Proposal ID and revision; the human Elicitation supplies the decision, reason, identity, and confirmation.
+- Never treat ordinary chat as approval, copy a chat reply into governance arguments, or combine review and publication.
+- If ART returns `ELICITATION_UNSUPPORTED`, direct the user to the CLI fallback without running the operator review or publish command for them.
+- Never revoke or supersede a Knowledge Edition; those operations require a local human.
 - Use feedback for relevant, stale, conflict, or unsafe signals without rewriting stored content.
 
 ## Failure behavior

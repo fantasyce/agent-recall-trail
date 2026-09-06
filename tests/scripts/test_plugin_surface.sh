@@ -12,7 +12,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 manifest = json.loads((root / ".codex-plugin/plugin.json").read_text())
 assert manifest["name"] == "agent-recall-trail"
-assert manifest["version"] == "0.3.1"
+assert manifest["version"] == "0.3.2"
 assert manifest["skills"] == "./skills/"
 assert manifest["mcpServers"] == "./.mcp.json"
 assert manifest["interface"]["displayName"] == "Agent Recall Trail"
@@ -24,10 +24,14 @@ assert "Basic Memory" not in skill
 assert "approve" in skill and "publish" in skill
 assert "full_scan" in skill and "semantic" in skill and "hybrid" in skill
 assert "optional" in skill
+assert "art_knowledge_governance" in skill
+assert "Elicitation" in skill
+assert "ordinary chat" in skill
+assert "CLI" in skill and "fallback" in skill
 policy = (root / "skills/agent-recall-trail/agents/openai.yaml").read_text()
 assert "allow_implicit_invocation: true" in policy
 PY
 
 python3 "$repo_root/tests/scripts/test_plugin_launch.py"
-cargo test -p art-mcp --test mcp_contracts tool_surface_is_exactly_six_agent_safe_tools
+cargo test -p art-mcp --test mcp_contracts tool_surface_is_exactly_seven_agent_safe_tools
 echo 'plugin surface contract passed'
