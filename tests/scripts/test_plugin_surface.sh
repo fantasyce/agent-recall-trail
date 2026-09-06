@@ -30,6 +30,9 @@ assert "ordinary chat" in skill
 assert "CLI" in skill and "fallback" in skill
 policy = (root / "skills/agent-recall-trail/agents/openai.yaml").read_text()
 assert "allow_implicit_invocation: true" in policy
+bundle_manifest = json.loads((root.parents[1] / "packaging/mcpb/manifest.json.in").read_text())
+assert len(bundle_manifest["tools"]) == 7
+assert "art_knowledge_governance" in {tool["name"] for tool in bundle_manifest["tools"]}
 PY
 
 python3 "$repo_root/tests/scripts/test_plugin_launch.py"

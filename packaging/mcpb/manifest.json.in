@@ -15,6 +15,7 @@
     {"name":"art_read","description":"Read one authorized memory or Knowledge Edition."},
     {"name":"art_memory_capture","description":"Capture one bounded conclusion in this Agent's private vault."},
     {"name":"art_knowledge_propose","description":"Draft a knowledge proposal for later human review."},
+    {"name":"art_knowledge_governance","description":"Request separate human review or publication confirmation through MCP Elicitation."},
     {"name":"art_feedback","description":"Record bounded feedback on recalled evidence."},
     {"name":"art_health","description":"Inspect the bound Agent runtime health."}
   ],
