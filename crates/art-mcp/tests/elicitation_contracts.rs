@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -22,6 +23,8 @@ struct ElicitationClient {
     responses: Arc<Mutex<VecDeque<ElicitResult>>>,
     requests: Arc<Mutex<Vec<ElicitRequestParams>>>,
     supports_elicitation: bool,
+    stale_on_request: Option<usize>,
+    knowledge_db: PathBuf,
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -31,7 +34,17 @@ impl ClientHandler for ElicitationClient {
         request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, rmcp::ErrorData> {
-        self.requests.lock().unwrap().push(request);
+        let request_count = {
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(request);
+            requests.len()
+        };
+        if self.stale_on_request == Some(request_count) {
+            rusqlite::Connection::open(&self.knowledge_db)
+                .unwrap()
+                .execute("UPDATE knowledge_proposals SET status='stale'", [])
+                .unwrap();
+        }
         Ok(self
             .responses
             .lock()
@@ -61,6 +74,14 @@ struct Harness {
 
 impl Harness {
     async fn start(supports_elicitation: bool, responses: Vec<ElicitResult>) -> Self {
+        Self::start_with_stale_request(supports_elicitation, responses, None).await
+    }
+
+    async fn start_with_stale_request(
+        supports_elicitation: bool,
+        responses: Vec<ElicitResult>,
+        stale_on_request: Option<usize>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
         let server = ArtMcpServer::open(
@@ -74,6 +95,10 @@ impl Harness {
             responses: Arc::new(Mutex::new(responses.into())),
             requests: Arc::clone(&requests),
             supports_elicitation,
+            stale_on_request,
+            knowledge_db: root
+                .path()
+                .join("data/art/knowledge-vault/art-control.sqlite3"),
         };
         let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
         let server_task = tokio::spawn(async move {
@@ -194,6 +219,20 @@ impl Harness {
                 rusqlite::params![proposal_id, serde_json::to_string(&draft).unwrap()],
             )
             .unwrap();
+    }
+
+    fn edition_count(&self) -> u32 {
+        let connection = rusqlite::Connection::open(
+            self.root
+                .path()
+                .join("data/art/knowledge-vault/art-control.sqlite3"),
+        )
+        .unwrap();
+        connection
+            .query_row("SELECT COUNT(*) FROM edition_projections", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
     }
 }
 
@@ -571,5 +610,38 @@ async fn elevated_single_source_requires_a_distinct_second_operator() {
         .await;
     assert_eq!(second["reason_code"], "INDEPENDENT_REVIEW_REQUIRED");
     assert_eq!(harness.requests.lock().unwrap().len(), 1);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn publish_revalidates_the_approved_snapshot_after_human_confirmation() {
+    let harness = Harness::start_with_stale_request(
+        true,
+        vec![
+            ElicitResult::new(ElicitationAction::Accept)
+                .with_content(json!({"decision":"approve","reason":"Approved exact snapshot."})),
+            ElicitResult::new(ElicitationAction::Accept).with_content(json!({"confirm":true})),
+        ],
+        Some(2),
+    )
+    .await;
+    let (proposal_id, revision) = harness.proposal().await;
+    let approved = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(approved["proposal_status"], "approved");
+
+    let publish = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"publish", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(publish["outcome"], "operator_action_required");
+    assert_eq!(publish["reason_code"], "SOURCE_STALE");
+    assert_eq!(harness.edition_count(), 0);
     harness.stop().await;
 }
