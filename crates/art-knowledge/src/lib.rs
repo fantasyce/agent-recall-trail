@@ -27,6 +27,22 @@ use unicode_normalization::UnicodeNormalization;
 type ProposalRow = (u32, String, String, String, String, String, String, String);
 type EditionRow = (String, u32, String, String, String, String, String, String);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationMode {
+    HumanReview,
+    DelegatedLocal,
+}
+
+impl DelegationMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::HumanReview => "human_review",
+            Self::DelegatedLocal => "delegated_local",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditionRecord {
     pub edition_id: String,
@@ -149,6 +165,8 @@ impl KnowledgeVault {
              CREATE TABLE IF NOT EXISTS knowledge_events (event_id TEXT PRIMARY KEY, event_hash TEXT NOT NULL, schema TEXT NOT NULL, edition_id TEXT NOT NULL, applied_at TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS knowledge_navigation (edition_id TEXT PRIMARY KEY, knowledge_key TEXT NOT NULL, edition_number INTEGER NOT NULL, title TEXT NOT NULL, applicability TEXT NOT NULL, published_at TEXT NOT NULL, current INTEGER NOT NULL, usage_count INTEGER NOT NULL DEFAULT 0, source_epoch TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS knowledge_navigation_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), source_epoch TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS delegation_policies (host_binding_hash TEXT NOT NULL, agent_id TEXT NOT NULL, mode TEXT NOT NULL, enabled_at TEXT, updated_at TEXT NOT NULL, updated_via TEXT NOT NULL, PRIMARY KEY(host_binding_hash,agent_id));
+             CREATE TABLE IF NOT EXISTS delegation_policy_events (id TEXT PRIMARY KEY, host_binding_hash TEXT NOT NULL, agent_id TEXT NOT NULL, previous_mode TEXT NOT NULL, new_mode TEXT NOT NULL, changed_via TEXT NOT NULL, changed_at TEXT NOT NULL);
              CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(edition_id UNINDEXED,search_text,tokenize='unicode61');
              CREATE INDEX IF NOT EXISTS edition_current ON edition_projections(knowledge_key, current, revoked);",
         ).map_err(db_error)?;
@@ -163,6 +181,73 @@ impl KnowledgeVault {
         vault.recover_event_intents()?;
         vault.reconcile_events()?;
         Ok(vault)
+    }
+
+    pub fn delegation_mode(
+        &self,
+        agent_id: &AgentId,
+        host_binding_hash: &str,
+    ) -> ArtResult<DelegationMode> {
+        validate_host_binding_hash(host_binding_hash)?;
+        let connection = self.connection()?;
+        let mode = connection
+            .query_row(
+                "SELECT mode FROM delegation_policies WHERE host_binding_hash=?1 AND agent_id=?2",
+                params![host_binding_hash, agent_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        mode.map_or(Ok(DelegationMode::HumanReview), |value| {
+            parse_delegation_mode(&value)
+        })
+    }
+
+    pub fn set_delegation_mode(
+        &self,
+        agent_id: &AgentId,
+        host_binding_hash: &str,
+        mode: DelegationMode,
+        changed_via: &str,
+    ) -> ArtResult<()> {
+        validate_host_binding_hash(host_binding_hash)?;
+        if changed_via != "local_governance_ui" {
+            return Err(ArtError::PermissionDenied(
+                "delegation policy may only be changed through the local governance UI".into(),
+            ));
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let previous = transaction
+            .query_row(
+                "SELECT mode FROM delegation_policies WHERE host_binding_hash=?1 AND agent_id=?2",
+                params![host_binding_hash, agent_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .unwrap_or_else(|| DelegationMode::HumanReview.as_str().into());
+        let now = Utc::now().to_rfc3339();
+        let enabled_at = if mode == DelegationMode::DelegatedLocal {
+            Some(now.as_str())
+        } else {
+            None
+        };
+        transaction
+            .execute(
+                "INSERT INTO delegation_policies(host_binding_hash,agent_id,mode,enabled_at,updated_at,updated_via) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(host_binding_hash,agent_id) DO UPDATE SET mode=excluded.mode,enabled_at=CASE WHEN excluded.mode='delegated_local' THEN COALESCE(delegation_policies.enabled_at,excluded.enabled_at) ELSE NULL END,updated_at=excluded.updated_at,updated_via=excluded.updated_via",
+                params![host_binding_hash, agent_id.as_str(), mode.as_str(), enabled_at, now, changed_via],
+            )
+            .map_err(db_error)?;
+        transaction
+            .execute(
+                "INSERT INTO delegation_policy_events(id,host_binding_hash,agent_id,previous_mode,new_mode,changed_via,changed_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![format!("artg_{}", Ulid::new()), host_binding_hash, agent_id.as_str(), previous, mode.as_str(), changed_via, now],
+            )
+            .map_err(db_error)?;
+        transaction.commit().map_err(db_error)
     }
 
     pub fn propose(
@@ -1695,6 +1780,30 @@ fn parse_status(value: &str) -> ArtResult<ProposalStatus> {
         "materialized" => Ok(ProposalStatus::Materialized),
         "archived" => Ok(ProposalStatus::Archived),
         _ => Err(ArtError::Internal("unknown proposal status".into())),
+    }
+}
+
+fn validate_host_binding_hash(value: &str) -> ArtResult<()> {
+    let valid = value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if valid {
+        Ok(())
+    } else {
+        Err(ArtError::InvalidInput(
+            "host binding hash must be 64 lowercase hexadecimal characters".into(),
+        ))
+    }
+}
+
+fn parse_delegation_mode(value: &str) -> ArtResult<DelegationMode> {
+    match value {
+        "human_review" => Ok(DelegationMode::HumanReview),
+        "delegated_local" => Ok(DelegationMode::DelegatedLocal),
+        _ => Err(ArtError::Internal(
+            "unknown delegation policy mode".into(),
+        )),
     }
 }
 #[allow(clippy::needless_pass_by_value)]

@@ -9,7 +9,7 @@ use art_domain::{
     },
     memory::Sensitivity,
 };
-use art_knowledge::{GovernanceSnapshot, KnowledgeVault};
+use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
@@ -24,6 +24,69 @@ fn source(agent: &AgentId) -> ProposalSourceLock {
         approved_excerpt_hash: Some("c".repeat(64)),
         use_grant_id: None,
     }
+}
+
+#[test]
+fn delegation_policy_defaults_off_persists_and_stays_identity_scoped() {
+    let root = tempdir().unwrap();
+    let codex = AgentId::from_str("codex-primary").unwrap();
+    let dsh = AgentId::from_str("dsh-primary").unwrap();
+    let codex_host = "a".repeat(64);
+    let other_host = "b".repeat(64);
+    let vault = KnowledgeVault::open(root.path(), [43_u8; 32]).unwrap();
+
+    assert_eq!(
+        vault.delegation_mode(&codex, &codex_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+    vault
+        .set_delegation_mode(
+            &codex,
+            &codex_host,
+            DelegationMode::DelegatedLocal,
+            "local_governance_ui",
+        )
+        .unwrap();
+    assert_eq!(
+        vault.delegation_mode(&dsh, &codex_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+    assert_eq!(
+        vault.delegation_mode(&codex, &other_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+    drop(vault);
+
+    let reopened = KnowledgeVault::open(root.path(), [43_u8; 32]).unwrap();
+    assert_eq!(
+        reopened.delegation_mode(&codex, &codex_host).unwrap(),
+        DelegationMode::DelegatedLocal
+    );
+    reopened
+        .set_delegation_mode(
+            &codex,
+            &codex_host,
+            DelegationMode::HumanReview,
+            "local_governance_ui",
+        )
+        .unwrap();
+    assert_eq!(
+        reopened.delegation_mode(&codex, &codex_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    let event_count: u64 = connection
+        .query_row("SELECT COUNT(*) FROM delegation_policy_events", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(event_count, 2);
+    assert!(
+        reopened
+            .delegation_mode(&codex, "not-a-binding-hash")
+            .is_err()
+    );
 }
 
 fn published_fixture(
