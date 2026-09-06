@@ -33,7 +33,8 @@ use chrono::Utc;
 use rmcp::{
     Json, Peer, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    service::ElicitationError,
+    model::{ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema},
+    service::{ElicitationError, ElicitationMode},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -126,24 +127,18 @@ pub struct KnowledgeGovernanceInput {
     pub revision: u32,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReviewElicitationResponse {
-    #[schemars(extend("enum" = ["approve", "request_changes", "reject"]))]
     decision: String,
-    #[schemars(length(min = 1, max = 1000))]
     reason: String,
 }
 
-rmcp::elicit_safe!(ReviewElicitationResponse);
-
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PublishElicitationResponse {
     confirm: bool,
 }
-
-rmcp::elicit_safe!(PublishElicitationResponse);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProposalSnapshot {
@@ -605,13 +600,21 @@ impl ArtMcpServer {
             snapshot.draft_hash,
             proposal.draft.markdown,
         );
-        let response = match peer
-            .elicit_with_timeout::<ReviewElicitationResponse>(
-                message,
-                Some(Duration::from_secs(300)),
+        let schema = ElicitationSchema::builder()
+            .required_enum_schema(
+                "decision",
+                EnumSchema::builder(vec![
+                    "approve".into(),
+                    "request_changes".into(),
+                    "reject".into(),
+                ])
+                .description("Choose one human review decision")
+                .build(),
             )
-            .await
-        {
+            .required_string_with("reason", |schema| schema.length(1, 1000))
+            .build()
+            .map_err(|error| tool_error(ArtError::Internal(error.into())))?;
+        let response = match elicit_form::<ReviewElicitationResponse>(peer, message, schema).await {
             Ok(Some(response)) => response,
             Ok(None) | Err(ElicitationError::NoContent) => {
                 return governance_output(
@@ -742,12 +745,11 @@ impl ArtMcpServer {
             snapshot.draft_hash,
             proposal.draft.markdown,
         );
-        let response = match peer
-            .elicit_with_timeout::<PublishElicitationResponse>(
-                message,
-                Some(Duration::from_secs(300)),
-            )
-            .await
+        let schema = ElicitationSchema::builder()
+            .required_bool("confirm")
+            .build()
+            .map_err(|error| tool_error(ArtError::Internal(error.into())))?;
+        let response = match elicit_form::<PublishElicitationResponse>(peer, message, schema).await
         {
             Ok(Some(response)) => response,
             Ok(None) | Err(ElicitationError::NoContent) => {
@@ -840,6 +842,46 @@ impl ArtMcpServer {
             .proposal(&snapshot.id)
             .map_err(tool_error)?;
         Ok(ProposalSnapshot::from_proposal(&current)? == *snapshot)
+    }
+}
+
+async fn elicit_form<T>(
+    peer: &Peer<RoleServer>,
+    message: String,
+    requested_schema: ElicitationSchema,
+) -> Result<Option<T>, ElicitationError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !peer
+        .supported_elicitation_modes()
+        .contains(&ElicitationMode::Form)
+    {
+        return Err(ElicitationError::CapabilityNotSupported);
+    }
+    let response: ElicitResult = peer
+        .create_elicitation_with_timeout(
+            ElicitRequestParams::FormElicitationParams {
+                meta: None,
+                message,
+                requested_schema,
+            },
+            Some(Duration::from_secs(300)),
+        )
+        .await
+        .map_err(ElicitationError::Service)?;
+    match response.action {
+        ElicitationAction::Accept => {
+            let content = response.content.ok_or(ElicitationError::NoContent)?;
+            serde_json::from_value(content.clone())
+                .map(Some)
+                .map_err(|error| ElicitationError::ParseError {
+                    error,
+                    data: content,
+                })
+        }
+        ElicitationAction::Decline => Err(ElicitationError::UserDeclined),
+        _ => Err(ElicitationError::UserCancelled),
     }
 }
 

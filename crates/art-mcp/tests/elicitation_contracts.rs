@@ -237,6 +237,15 @@ async fn review_approval_is_collected_by_form_elicitation_and_committed() {
         assert!(message.contains("Complete proposal body for the reviewer."));
         let schema = serde_json::to_value(requested_schema).unwrap();
         assert!(schema.to_string().contains("request_changes"));
+        let allowed_root_fields = ["$schema", "type", "properties", "required"];
+        assert!(
+            schema
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|key| { allowed_root_fields.contains(&key.as_str()) }),
+            "Codex rejects unsupported root Elicitation schema fields: {schema}"
+        );
     }
     harness.stop().await;
 }
