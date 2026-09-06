@@ -24,13 +24,20 @@ chooses it; embedding is optional and remains operator-supplied. When a
 semantic mode reports a fallback, continue with the returned lexical evidence
 and do not claim semantic retrieval succeeded.
 
+Prefer the recall defaults unless a task needs a different bound. If supplied,
+`budget_tokens` must be 128..6000; `max_private_results` and
+`max_knowledge_results` must each be 1..20. Omit either result limit (or use
+null) for its default; zero does not disable a lane. Recall searches both
+private memory and shared knowledge. After a validation error, correct only
+documented parameters before retrying.
+
 Capture only a bounded reusable conclusion with `art_memory_capture`. Choose
 the matching Episode, Semantic, Procedure, or Decision payload; include safe
 source anchors and scope; omit secrets, full transcripts, unrestricted command
 output, and temporary Recall Bundles. Correct an existing memory with an exact
 expected revision instead of silently creating a contradictory duplicate.
 
-Use `art_memory_feedback` to record a useful or conflicting retrieval. Create a
+Use `art_feedback` to record a useful or conflicting retrieval. Create a
 knowledge proposal only from exact, authorized source revisions. Agents never
 approve, publish, revoke, supersede, archive, or make assurance decisions for
 shared knowledge; those actions remain explicit human CLI operations.
