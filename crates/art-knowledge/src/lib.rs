@@ -587,8 +587,8 @@ impl KnowledgeVault {
         match publication {
             Ok(edition) => Ok(edition),
             Err(error) => {
-                self.recover_publish_intents()?;
-                self.read_including_revoked(&edition_id).or(Err(error))
+                self.quarantine_publish_intent(&intent_id, &edition_id, &target_dir)?;
+                Err(error)
             }
         }
     }
@@ -1102,6 +1102,76 @@ impl KnowledgeVault {
             recovered += 1;
         }
         Ok(recovered)
+    }
+
+    fn quarantine_publish_intent(
+        &self,
+        intent_id: &str,
+        edition_id: &str,
+        target_dir: &Path,
+    ) -> ArtResult<()> {
+        ensure_target(&self.root, target_dir)?;
+        let state: Option<String> = self
+            .connection()?
+            .query_row(
+                "SELECT state FROM publish_intents WHERE id=?1",
+                [intent_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if matches!(state.as_deref(), None | Some("committed" | "recoverable")) {
+            return Ok(());
+        }
+        let recovery_dir = self.root.join(".art/recovery").join(intent_id);
+        ensure_target(&self.root, &recovery_dir)?;
+        fs::create_dir_all(&recovery_dir).map_err(io_error)?;
+        set_private_directory(&self.root.join(".art/recovery"))?;
+        set_private_directory(&recovery_dir)?;
+        if target_dir.exists() {
+            for entry in fs::read_dir(target_dir).map_err(io_error)? {
+                let path = entry.map_err(io_error)?.path();
+                let name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("");
+                if !name.contains(edition_id) {
+                    continue;
+                }
+                let target = recovery_dir.join(
+                    path.file_name()
+                        .ok_or_else(|| ArtError::PathConflict("invalid recovery path".into()))?,
+                );
+                fs::rename(path, target).map_err(io_error)?;
+            }
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        transaction
+            .execute(
+                "UPDATE publish_intents SET state='recoverable',reason='publication failed and files were quarantined',updated_at=?2 WHERE id=?1 AND state!='committed'",
+                params![intent_id, Utc::now().to_rfc3339()],
+            )
+            .map_err(db_error)?;
+        transaction
+            .execute(
+                "DELETE FROM publication_reservations WHERE edition_id=?1",
+                [edition_id],
+            )
+            .map_err(db_error)?;
+        transaction.commit().map_err(db_error)
+    }
+
+    #[doc(hidden)]
+    pub fn test_only_quarantine_publish_intent(
+        &self,
+        intent_id: &str,
+        edition_id: &str,
+        target_dir: &Path,
+    ) -> ArtResult<()> {
+        self.quarantine_publish_intent(intent_id, edition_id, target_dir)
     }
 
     pub fn recover_event_intents(&self) -> ArtResult<u64> {

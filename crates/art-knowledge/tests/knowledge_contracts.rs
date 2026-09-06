@@ -444,6 +444,58 @@ fn partial_publish_recovery_releases_the_reserved_number_for_a_fresh_confirmatio
 }
 
 #[test]
+fn targeted_failure_cleanup_never_touches_another_active_publication() {
+    let root = tempdir().unwrap();
+    let vault = KnowledgeVault::open(root.path(), [45_u8; 32]).unwrap();
+    let target_a = root.path().join("editions/target-a");
+    let target_b = root.path().join("editions/target-b");
+    std::fs::create_dir_all(&target_a).unwrap();
+    std::fs::create_dir_all(&target_b).unwrap();
+    let file_a = target_a.join("1-arke_a.json");
+    let file_b = target_b.join("1-arke_b.json");
+    std::fs::write(&file_a, "partial a").unwrap();
+    std::fs::write(&file_b, "active b").unwrap();
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    for (proposal, key, edition, intent, target) in [
+        ("artp_a", "target-a", "arke_a", "arti_a", &target_a),
+        ("artp_b", "target-b", "arke_b", "arti_b", &target_b),
+    ] {
+        connection.execute(
+            "INSERT INTO publication_reservations(proposal_id,proposal_revision,knowledge_key,edition_number,edition_id,created_at) VALUES (?1,1,?2,1,?3,'now')",
+            rusqlite::params![proposal, key, edition],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO publish_intents(id,proposal_id,proposal_revision,edition_id,target_dir,state,created_at,updated_at) VALUES (?1,?2,1,?3,?4,'prepared','now','now')",
+            rusqlite::params![intent, proposal, edition, target.to_string_lossy()],
+        ).unwrap();
+    }
+    drop(connection);
+
+    vault
+        .test_only_quarantine_publish_intent("arti_a", "arke_a", &target_a)
+        .unwrap();
+    assert!(!file_a.exists());
+    assert!(file_b.exists());
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    let state_b: String = connection
+        .query_row(
+            "SELECT state FROM publish_intents WHERE id='arti_b'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let reservation_b: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM publication_reservations WHERE edition_id='arke_b')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state_b, "prepared");
+    assert!(reservation_b);
+}
+
+#[test]
 fn editions_are_immutable_shareable_and_revocable_without_private_ids() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();
