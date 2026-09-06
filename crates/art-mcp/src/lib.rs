@@ -1,5 +1,7 @@
 //! Agent-bound stdio MCP server.
 
+pub mod governance_ui;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -40,6 +42,8 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::governance_ui::{GovernanceUiManager, UiView};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RecallInput {
@@ -152,6 +156,14 @@ pub struct FeedbackInput {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct HealthInput {}
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GovernanceUiOpenInput {
+    pub view: UiView,
+    pub proposal_id: Option<String>,
+    pub revision: Option<u32>,
+}
+
 /// Stable object-shaped MCP result accepted by strict MCP clients.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolOutput {
@@ -179,6 +191,7 @@ pub struct ArtMcpServer {
     host_binding: String,
     private_vault: AgentVault,
     knowledge_vault: KnowledgeVault,
+    governance_ui: GovernanceUiManager,
     recall_engine: RecallEngine,
     shutting_down: Arc<AtomicBool>,
     elicitation_timeout: Duration,
@@ -202,12 +215,18 @@ impl ArtMcpServer {
             "art_root": paths.root().to_string_lossy(),
             "agent_profile": profile_digest,
         }));
+        let governance_ui = GovernanceUiManager::new(
+            knowledge_vault.clone(),
+            agent_id.clone(),
+            host_binding.clone(),
+        );
         Ok(Self {
             tool_router: Self::tool_router(),
             agent_id,
             host_binding,
             private_vault,
             knowledge_vault,
+            governance_ui,
             recall_engine,
             shutting_down: Arc::new(AtomicBool::new(false)),
             elicitation_timeout: Duration::from_secs(300),
@@ -571,6 +590,45 @@ impl ArtMcpServer {
         Ok(Json(ToolOutput::from_value(
             json!({"schema":"art.mcp.v1","feedback_id":id,"accepted":true}),
         )?))
+    }
+
+    #[tool(
+        name = "art_governance_ui_open",
+        description = "Open a short-lived ART local governance page for pending proposals, settings, or audit. The returned loopback URL is bound to this Agent and host."
+    )]
+    pub async fn art_governance_ui_open(
+        &self,
+        Parameters(input): Parameters<GovernanceUiOpenInput>,
+    ) -> Result<Json<ToolOutput>, String> {
+        self.ensure_running().map_err(tool_error)?;
+        let proposal = match (input.proposal_id, input.revision) {
+            (Some(id), Some(revision)) => {
+                let current = self.knowledge_vault.proposal(&id).map_err(tool_error)?;
+                if current.revision != revision {
+                    return Err(tool_error(ArtError::SourceStale));
+                }
+                Some((id, revision))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(tool_error(ArtError::InvalidInput(
+                    "proposal_id and revision must be supplied together".into(),
+                )));
+            }
+        };
+        let session = self
+            .governance_ui
+            .open_session(input.view, proposal)
+            .await
+            .map_err(tool_error)?;
+        Ok(Json(ToolOutput::from_value(json!({
+            "schema":"art.governance.ui.session.v1",
+            "url":session.url,
+            "expires_at":session.expires_at,
+            "view":session.view,
+            "proposal_id":session.proposal_id,
+            "revision":session.revision,
+        }))?))
     }
 
     #[tool(

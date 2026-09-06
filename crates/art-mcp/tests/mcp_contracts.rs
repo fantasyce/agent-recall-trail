@@ -5,8 +5,8 @@ use art_domain::{
     memory::{MemoryPayload, ProcedurePayload, Sensitivity},
 };
 use art_mcp::{
-    ArtMcpServer, FeedbackInput, HealthInput, KnowledgeProposeInput, MemoryCaptureInput, ReadInput,
-    RecallInput, SourceAnchorInput,
+    ArtMcpServer, FeedbackInput, GovernanceUiOpenInput, HealthInput, KnowledgeProposeInput,
+    MemoryCaptureInput, ReadInput, RecallInput, SourceAnchorInput, governance_ui::UiView,
 };
 use art_retrieval::{RecallDetail, RetrievalMode};
 use rmcp::handler::server::wrapper::Parameters;
@@ -55,19 +55,20 @@ async fn mcp_discovers_optional_embedding_without_changing_the_seven_tool_surfac
         [46; 32],
     )
     .unwrap();
-    assert_eq!(server.tool_names().len(), 7);
+    assert_eq!(server.tool_names().len(), 8);
     let health = server.art_health(Parameters(HealthInput {})).await.unwrap();
     assert_eq!(health.0.fields["vector_status"], "stale");
 }
 
 #[test]
-fn tool_surface_is_exactly_seven_agent_safe_tools() {
+fn tool_surface_is_exactly_eight_agent_safe_tools() {
     let (_root, server) = server();
     let names = server.tool_names();
     assert_eq!(
         names,
         vec![
             "art_feedback",
+            "art_governance_ui_open",
             "art_health",
             "art_knowledge_governance",
             "art_knowledge_propose",
@@ -110,6 +111,23 @@ fn tool_surface_is_exactly_seven_agent_safe_tools() {
         governance["inputSchema"]["additionalProperties"], false,
         "Agent governance input must reject undeclared authority fields"
     );
+}
+
+#[tokio::test]
+async fn governance_ui_open_returns_a_bounded_loopback_session() {
+    let (_root, server) = server();
+    let result = server
+        .art_governance_ui_open(Parameters(GovernanceUiOpenInput {
+            view: UiView::Settings,
+            proposal_id: None,
+            revision: None,
+        }))
+        .await
+        .unwrap();
+    let url = result.0.fields["url"].as_str().unwrap();
+    assert!(url.starts_with("http://127.0.0.1:"));
+    assert_eq!(result.0.fields["view"], "settings");
+    assert!(!result.0.fields.contains_key("capability"));
 }
 
 #[test]
