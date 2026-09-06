@@ -403,6 +403,47 @@ fn concurrent_same_key_publications_must_reconfirm_the_atomically_reserved_numbe
 }
 
 #[test]
+fn partial_publish_recovery_releases_the_reserved_number_for_a_fresh_confirmation() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [44_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("recover.reserve", "Recover", "retry safely"),
+            vec![source(&agent)],
+            "recover-reserve",
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "approved",
+        )
+        .unwrap();
+    let edition_id = "arke_interrupted";
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    connection.execute(
+        "INSERT INTO publication_reservations(proposal_id,proposal_revision,knowledge_key,edition_number,edition_id,created_at) VALUES (?1,1,'recover.reserve',1,?2,'now')",
+        rusqlite::params![proposal.id, edition_id],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO publish_intents(id,proposal_id,proposal_revision,edition_id,target_dir,state,created_at,updated_at) VALUES ('arti_interrupted',?1,1,?2,?3,'prepared','now','now')",
+        rusqlite::params![proposal.id, edition_id, root.path().join("editions/recover.reserve").to_string_lossy()],
+    ).unwrap();
+    drop(connection);
+    drop(vault);
+
+    let reopened = KnowledgeVault::open(root.path(), [44_u8; 32]).unwrap();
+    assert_eq!(reopened.next_edition_number("recover.reserve").unwrap(), 1);
+    let snapshot = GovernanceSnapshot::from_proposal(&reopened.proposal(&proposal.id).unwrap());
+    let edition = reopened.publish_exact(&snapshot, 1, true).unwrap();
+    assert_eq!(edition.edition_number, 1);
+}
+
+#[test]
 fn editions_are_immutable_shareable_and_revocable_without_private_ids() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();

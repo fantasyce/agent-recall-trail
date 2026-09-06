@@ -1069,12 +1069,23 @@ impl KnowledgeVault {
                 );
                 fs::rename(path, target).map_err(io_error)?;
             }
-            self.connection()?
+            let mut connection = self.connection()?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error)?;
+            transaction
                 .execute(
                     "UPDATE publish_intents SET state='recoverable',reason='partial publication quarantined',updated_at=?2 WHERE id=?1",
                     params![intent_id, Utc::now().to_rfc3339()],
                 )
                 .map_err(db_error)?;
+            transaction
+                .execute(
+                    "DELETE FROM publication_reservations WHERE edition_id=?1",
+                    [&edition_id],
+                )
+                .map_err(db_error)?;
+            transaction.commit().map_err(db_error)?;
             recovered += 1;
         }
         Ok(recovered)
