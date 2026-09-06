@@ -105,6 +105,21 @@ pub struct KnowledgeProposeInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeGovernanceOperation {
+    Review,
+    Publish,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeGovernanceInput {
+    pub operation: KnowledgeGovernanceOperation,
+    pub proposal_id: String,
+    pub revision: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FeedbackInput {
     pub subject_ref: String,
     pub signal: String,
@@ -391,6 +406,18 @@ impl ArtMcpServer {
         Ok(Json(ToolOutput::from_value(
             json!({"schema":"art.mcp.v1","proposal_id":proposal.id,"revision":proposal.revision,"status":proposal.status,"source_set_hash":proposal.source_set_hash}),
         )?))
+    }
+
+    #[tool(
+        name = "art_knowledge_governance",
+        description = "Request a human Knowledge Proposal review or publication confirmation through the MCP client. The Agent cannot supply the decision, reason, actor, or confirmation."
+    )]
+    pub async fn art_knowledge_governance(
+        &self,
+        Parameters(_input): Parameters<KnowledgeGovernanceInput>,
+    ) -> Result<Json<ToolOutput>, String> {
+        self.ensure_running().map_err(tool_error)?;
+        Err(tool_error(ArtError::InvalidStateTransition))
     }
 
     #[tool(

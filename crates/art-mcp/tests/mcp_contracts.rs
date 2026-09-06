@@ -23,7 +23,7 @@ fn server() -> (tempfile::TempDir, ArtMcpServer) {
 }
 
 #[tokio::test]
-async fn mcp_discovers_optional_embedding_without_changing_the_six_tool_surface() {
+async fn mcp_discovers_optional_embedding_without_changing_the_seven_tool_surface() {
     let root = tempdir().unwrap();
     let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
     let config_dir = root.path().join("config/art/embedding");
@@ -55,13 +55,13 @@ async fn mcp_discovers_optional_embedding_without_changing_the_six_tool_surface(
         [46; 32],
     )
     .unwrap();
-    assert_eq!(server.tool_names().len(), 6);
+    assert_eq!(server.tool_names().len(), 7);
     let health = server.art_health(Parameters(HealthInput {})).await.unwrap();
     assert_eq!(health.0.fields["vector_status"], "stale");
 }
 
 #[test]
-fn tool_surface_is_exactly_six_agent_safe_tools() {
+fn tool_surface_is_exactly_seven_agent_safe_tools() {
     let (_root, server) = server();
     let names = server.tool_names();
     assert_eq!(
@@ -69,6 +69,7 @@ fn tool_surface_is_exactly_six_agent_safe_tools() {
         vec![
             "art_feedback",
             "art_health",
+            "art_knowledge_governance",
             "art_knowledge_propose",
             "art_memory_capture",
             "art_read",
@@ -92,6 +93,24 @@ fn tool_surface_is_exactly_six_agent_safe_tools() {
     for tool in tools.as_array().unwrap() {
         assert_eq!(tool["outputSchema"]["type"], "object");
     }
+    let governance = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "art_knowledge_governance")
+        .unwrap();
+    let properties = &governance["inputSchema"]["properties"];
+    for allowed in ["operation", "proposal_id", "revision"] {
+        assert!(properties.get(allowed).is_some(), "missing {allowed}");
+    }
+    for forbidden in ["decision", "reason", "actor", "confirm"] {
+        assert!(properties.get(forbidden).is_none(), "exposed {forbidden}");
+    }
+    assert_eq!(
+        governance["inputSchema"]["additionalProperties"],
+        false,
+        "Agent governance input must reject undeclared authority fields"
+    );
 }
 
 #[test]
