@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 - 2026-09-06
+
+- Fixed Codex plugin startup when GUI or restricted SSH hosts omit the user-local executable directory from `PATH`.
+- Added a package-relative POSIX launcher that preserves explicit `PATH` installations and falls back to the standard `~/.local/bin/art` link.
+- Corrected the Codex skill's feedback tool name and documented recall parameter bounds and default behavior in both Codex and DSH guidance.
+- Added launch, reconnect, missing-installation, argument-preservation, and exact MCP surface regression coverage.
+- Clarified navigation alignment diagnostics and the host cache refresh required after plugin changes.
+- Made the release gate honor an isolated Cargo target directory.
+
 ## 0.3.0 - 2026-08-31
 
 - Added progressive `route -> recall -> read` retrieval with bounded, lane-local navigation projections.

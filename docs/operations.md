@@ -6,6 +6,13 @@ Always pass `--home` in automation. For interactive use, precedence is `--home` 
 
 `art doctor --agent <id> --json` reports binary/schema versions, profile and Vault binding, owner-only modes, SQLite integrity/foreign keys/WAL, migration checksum, record and search-index counts, index and navigation alignment, shared manifest/event hashes, stale proposals, pending publication recovery, FD count, and vector availability. `--repair-preview` returns exact human recovery targets; `--apply` is deliberately rejected because Doctor never mutates implicitly. `art reindex --agent <id>` rebuilds the private lexical projection and checkpoints WAL; `--knowledge` rebuilds the shared projection and lexical index from immutable files/events. Add `--navigation` to rebuild the lane-local route maps.
 
+Navigation alignment compares the projection's source epoch with canonical
+state; it is not a comparison of total record counts. Captures and revisions
+can leave the disposable navigation map stale until `route` or `art_health`
+rebuilds it. Doctor reports this state without refreshing it. Private navigation
+contains Active records only, so different counts alone do not prove missing
+memory. Check canonical integrity and the post-refresh alignment separately.
+
 ## Retrieval modes and optional embedding
 
 The same recall command supports all four modes:

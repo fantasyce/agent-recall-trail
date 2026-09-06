@@ -2,7 +2,7 @@
 
 ART is a local-first memory and reviewed-knowledge product for coding agents. Every Agent gets a physically separate private Recall Trail. Stable conclusions become human-reviewed, immutable Knowledge Editions that other Agents can retrieve without seeing private source identities or source bodies.
 
-ART `0.3.0` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, daemon, cloud sync, bundled model, or autonomous publication is required.
+ART `0.3.1` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, daemon, cloud sync, bundled model, or autonomous publication is required.
 
 ## Product boundary
 
@@ -53,8 +53,9 @@ does not edit Codex or DSH configuration. The thin Codex plugin lives under
 `codex-primary`. See [operations](docs/operations.md) before migrating or
 publishing knowledge.
 
-ART 0.3.0 adds progressive routing, governed full scan, and optional semantic
-and hybrid adapters while preserving deterministic Knowledge Vault backup,
+ART 0.3.1 fixes plugin discovery in restricted host environments while
+retaining progressive routing, governed full scan, optional semantic and
+hybrid adapters, and deterministic Knowledge Vault backup,
 encrypted recovery of local review authority, verified empty-home restoration,
 and reproducible lexical BEIR gates. See
 [operations](docs/operations.md#backup-and-disaster-recovery) before creating

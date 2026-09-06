@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "agent-recall-trail": {
-      "command": "art",
-      "args": ["mcp", "serve", "--agent", "codex-primary"]
+      "command": "/bin/sh",
+      "args": ["scripts/launch-mcp.sh", "mcp", "serve", "--agent", "codex-primary"],
+      "cwd": "."
     }
   }
 }
