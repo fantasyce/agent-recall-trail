@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    ArtError, ArtResult,
     agent::AgentId,
     memory::{Sensitivity, canonical_json_hash},
 };
@@ -93,12 +94,49 @@ pub struct KnowledgeProposal {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegatedAuthorizationBasis {
+    CurrentUserInstruction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DelegatedReviewIdentity {
+    pub agent_id: AgentId,
+    pub host_binding_hash: String,
+    pub authorization_basis: DelegatedAuthorizationBasis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum ReviewActor {
     Human(String),
     Agent(AgentId),
+    AgentDelegated(DelegatedReviewIdentity),
     Policy(String),
+}
+
+impl ReviewActor {
+    pub fn agent_delegated(
+        agent_id: AgentId,
+        host_binding_hash: String,
+        authorization_basis: DelegatedAuthorizationBasis,
+    ) -> ArtResult<Self> {
+        let valid_hash = host_binding_hash.len() == 64
+            && host_binding_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if !valid_hash {
+            return Err(ArtError::InvalidInput(
+                "delegated host binding hash must be 64 lowercase hexadecimal characters".into(),
+            ));
+        }
+        Ok(Self::AgentDelegated(DelegatedReviewIdentity {
+            agent_id,
+            host_binding_hash,
+            authorization_basis,
+        }))
+    }
 }
 
 pub fn proposal_source_set_hash(sources: &[ProposalSourceLock]) -> String {

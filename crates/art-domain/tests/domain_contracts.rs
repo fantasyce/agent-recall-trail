@@ -8,6 +8,7 @@ use art_domain::memory::{
     DecisionPayload, EpisodePayload, MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus,
     ProcedurePayload, SemanticPayload, Sensitivity,
 };
+use art_domain::knowledge::{DelegatedAuthorizationBasis, ReviewActor};
 use chrono::Utc;
 use proptest::prelude::*;
 use serde_json::json;
@@ -30,6 +31,41 @@ fn agent_ids_are_canonical_and_reserved_names_are_rejected() {
     ] {
         assert!(AgentId::from_str(invalid).is_err(), "accepted {invalid}");
     }
+}
+
+#[test]
+fn delegated_actor_is_distinct_from_human_and_rejects_invalid_host_binding_hashes() {
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let actor = ReviewActor::agent_delegated(
+        agent,
+        "a".repeat(64),
+        DelegatedAuthorizationBasis::CurrentUserInstruction,
+    )
+    .unwrap();
+    let encoded = serde_json::to_value(&actor).unwrap();
+    assert_eq!(encoded["kind"], "agent_delegated");
+    assert_eq!(
+        encoded["id"]["authorization_basis"],
+        "current_user_instruction"
+    );
+    assert_ne!(encoded["kind"], "human");
+
+    assert!(
+        ReviewActor::agent_delegated(
+            AgentId::from_str("codex-primary").unwrap(),
+            String::new(),
+            DelegatedAuthorizationBasis::CurrentUserInstruction,
+        )
+        .is_err()
+    );
+    assert!(
+        ReviewActor::agent_delegated(
+            AgentId::from_str("codex-primary").unwrap(),
+            "Z".repeat(64),
+            DelegatedAuthorizationBasis::CurrentUserInstruction,
+        )
+        .is_err()
+    );
 }
 
 #[test]
