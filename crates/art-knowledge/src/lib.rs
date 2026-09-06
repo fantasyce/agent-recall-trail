@@ -498,74 +498,75 @@ impl KnowledgeVault {
         reservation.execute("INSERT INTO publication_reservations(proposal_id,proposal_revision,knowledge_key,edition_number,edition_id,created_at) VALUES (?1,?2,?3,?4,?5,?6)", params![id,revision,proposal.draft.knowledge_key,edition_number,edition_id,reserved_at]).map_err(db_error)?;
         reservation.execute("INSERT INTO publish_intents(id,proposal_id,proposal_revision,edition_id,target_dir,state,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,'prepared',?6,?6)", params![intent_id,id,revision,edition_id,target_dir.to_string_lossy(),reserved_at]).map_err(db_error)?;
         reservation.commit().map_err(db_error)?;
-        let published_at = Utc::now().to_rfc3339();
-        let body_hash = hex_digest(proposal.draft.markdown.as_bytes());
-        let source_commitments = proposal
-            .sources
-            .iter()
-            .map(|source| self.commitment(source))
-            .collect();
-        let manifest = SharedManifest {
-            schema: "art.knowledge.edition.v1".into(),
-            edition_id: edition_id.clone(),
-            knowledge_key: proposal.draft.knowledge_key.clone(),
-            edition_number,
-            title: proposal.draft.title.clone(),
-            markdown_body_sha256: body_hash,
-            source_set_hash: proposal.source_set_hash.clone(),
-            source_commitments,
-            review_receipt_hash: canonical_json_hash(&serde_json::json!([
-                id,
-                revision,
-                proposal.source_set_hash
-            ])),
-            published_at: published_at.clone(),
-            generator: env!("CARGO_PKG_VERSION").into(),
-        };
-        let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(internal_error)?;
-        let manifest_sha256 = hex_digest(&manifest_bytes);
-        let stem = format!("{edition_number}-{edition_id}");
-        let manifest_path = target_dir.join(format!("{stem}.json"));
-        let markdown_path = target_dir.join(format!("{stem}.md"));
-        let markdown = format!(
-            "---\ntitle: {}\ntype: art-knowledge\nknowledge_key: {}\nedition_id: {}\nedition_number: {}\nstatus: published\nsensitivity: {:?}\npublished_at: {}\nmanifest: {}\nmanifest_sha256: {}\n---\n\n## Applicability\n\n{}\n\n## Knowledge\n\n{}\n",
-            proposal.draft.title,
-            proposal.draft.knowledge_key,
-            edition_id,
-            edition_number,
-            proposal.draft.sensitivity,
-            published_at,
-            manifest_path
-                .file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or_default(),
-            manifest_sha256,
-            proposal.draft.applicability,
-            proposal.draft.markdown
-        );
-        let markdown_sha256 = hex_digest(markdown.as_bytes());
-        atomic_create(&manifest_path, &manifest_bytes)?;
-        if let Err(error) = atomic_create(&markdown_path, markdown.as_bytes()) {
-            let _ = fs::remove_file(&manifest_path);
-            return Err(error);
-        }
-        let stored_markdown_path = self.portable_projection_path(&markdown_path)?;
-        let stored_manifest_path = self.portable_projection_path(&manifest_path)?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db_error)?;
-        transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![edition_id,proposal.draft.knowledge_key,edition_number,proposal.draft.title,stored_markdown_path,stored_manifest_path,markdown_sha256,manifest_sha256,published_at]).map_err(db_error)?;
-        transaction.execute(
+        let publication = (|| -> ArtResult<EditionRecord> {
+            let published_at = Utc::now().to_rfc3339();
+            let body_hash = hex_digest(proposal.draft.markdown.as_bytes());
+            let source_commitments = proposal
+                .sources
+                .iter()
+                .map(|source| self.commitment(source))
+                .collect();
+            let manifest = SharedManifest {
+                schema: "art.knowledge.edition.v1".into(),
+                edition_id: edition_id.clone(),
+                knowledge_key: proposal.draft.knowledge_key.clone(),
+                edition_number,
+                title: proposal.draft.title.clone(),
+                markdown_body_sha256: body_hash,
+                source_set_hash: proposal.source_set_hash.clone(),
+                source_commitments,
+                review_receipt_hash: canonical_json_hash(&serde_json::json!([
+                    id,
+                    revision,
+                    proposal.source_set_hash
+                ])),
+                published_at: published_at.clone(),
+                generator: env!("CARGO_PKG_VERSION").into(),
+            };
+            let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(internal_error)?;
+            let manifest_sha256 = hex_digest(&manifest_bytes);
+            let stem = format!("{edition_number}-{edition_id}");
+            let manifest_path = target_dir.join(format!("{stem}.json"));
+            let markdown_path = target_dir.join(format!("{stem}.md"));
+            let markdown = format!(
+                "---\ntitle: {}\ntype: art-knowledge\nknowledge_key: {}\nedition_id: {}\nedition_number: {}\nstatus: published\nsensitivity: {:?}\npublished_at: {}\nmanifest: {}\nmanifest_sha256: {}\n---\n\n## Applicability\n\n{}\n\n## Knowledge\n\n{}\n",
+                proposal.draft.title,
+                proposal.draft.knowledge_key,
+                edition_id,
+                edition_number,
+                proposal.draft.sensitivity,
+                published_at,
+                manifest_path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or_default(),
+                manifest_sha256,
+                proposal.draft.applicability,
+                proposal.draft.markdown
+            );
+            let markdown_sha256 = hex_digest(markdown.as_bytes());
+            atomic_create(&manifest_path, &manifest_bytes)?;
+            if let Err(error) = atomic_create(&markdown_path, markdown.as_bytes()) {
+                let _ = fs::remove_file(&manifest_path);
+                return Err(error);
+            }
+            let stored_markdown_path = self.portable_projection_path(&markdown_path)?;
+            let stored_manifest_path = self.portable_projection_path(&manifest_path)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error)?;
+            transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![edition_id,proposal.draft.knowledge_key,edition_number,proposal.draft.title,stored_markdown_path,stored_manifest_path,markdown_sha256,manifest_sha256,published_at]).map_err(db_error)?;
+            transaction.execute(
             "UPDATE edition_projections SET current=CASE WHEN edition_number=(SELECT MAX(edition_number) FROM edition_projections WHERE knowledge_key=?1 AND revoked=0) THEN 1 ELSE 0 END WHERE knowledge_key=?1",
             [&proposal.draft.knowledge_key],
         ).map_err(db_error)?;
-        transaction
-            .execute(
-                "INSERT INTO knowledge_fts(edition_id,search_text) VALUES (?1,?2)",
-                params![edition_id, search_document(&markdown)],
-            )
-            .map_err(db_error)?;
-        if transaction
+            transaction
+                .execute(
+                    "INSERT INTO knowledge_fts(edition_id,search_text) VALUES (?1,?2)",
+                    params![edition_id, search_document(&markdown)],
+                )
+                .map_err(db_error)?;
+            if transaction
             .execute(
                 "UPDATE knowledge_proposals SET status='materialized',updated_at=?3 WHERE id=?1 AND revision=?2 AND status='approved'",
                 params![id, revision, Utc::now().to_rfc3339()],
@@ -574,14 +575,22 @@ impl KnowledgeVault {
         {
             return Err(ArtError::SourceStale);
         }
-        transaction
-            .execute(
-                "UPDATE publish_intents SET state='committed',updated_at=?2 WHERE id=?1",
-                params![intent_id, Utc::now().to_rfc3339()],
-            )
-            .map_err(db_error)?;
-        transaction.commit().map_err(db_error)?;
-        self.read_including_revoked(&edition_id)
+            transaction
+                .execute(
+                    "UPDATE publish_intents SET state='committed',updated_at=?2 WHERE id=?1",
+                    params![intent_id, Utc::now().to_rfc3339()],
+                )
+                .map_err(db_error)?;
+            transaction.commit().map_err(db_error)?;
+            self.read_including_revoked(&edition_id)
+        })();
+        match publication {
+            Ok(edition) => Ok(edition),
+            Err(error) => {
+                self.recover_publish_intents()?;
+                self.read_including_revoked(&edition_id).or(Err(error))
+            }
+        }
     }
 
     pub fn current(&self, key: &str) -> ArtResult<EditionRecord> {
@@ -967,6 +976,10 @@ impl KnowledgeVault {
         }
         transaction.execute("UPDATE edition_projections AS candidate SET current=1 WHERE revoked=0 AND edition_number=(SELECT MAX(newest.edition_number) FROM edition_projections AS newest WHERE newest.knowledge_key=candidate.knowledge_key AND newest.revoked=0)", []).map_err(db_error)?;
         transaction.execute("UPDATE publish_intents SET state='committed',updated_at=?1 WHERE edition_id IN (SELECT edition_id FROM edition_projections)", [Utc::now().to_rfc3339()]).map_err(db_error)?;
+        transaction.execute(
+            "UPDATE knowledge_proposals SET status='materialized',updated_at=?1 WHERE status='approved' AND EXISTS(SELECT 1 FROM publication_reservations r JOIN edition_projections e ON e.edition_id=r.edition_id WHERE r.proposal_id=knowledge_proposals.id AND r.proposal_revision=knowledge_proposals.revision)",
+            [Utc::now().to_rfc3339()],
+        ).map_err(db_error)?;
         transaction.commit().map_err(db_error)?;
         u64::try_from(records.len()).map_err(internal_error)
     }

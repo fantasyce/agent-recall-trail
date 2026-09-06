@@ -813,6 +813,12 @@ fn opening_the_vault_completes_a_hash_valid_materialized_publish_intent() {
             [&edition.edition_id],
         )
         .unwrap();
+    control
+        .execute(
+            "UPDATE knowledge_proposals SET status='approved' WHERE id=?1",
+            [&proposal.id],
+        )
+        .unwrap();
     drop(control);
 
     let recovered = KnowledgeVault::open(root.path(), [6_u8; 32]).unwrap();
@@ -821,6 +827,10 @@ fn opening_the_vault_completes_a_hash_valid_materialized_publish_intent() {
         edition.edition_id
     );
     assert_eq!(recovered.pending_recoveries().unwrap(), 0);
+    assert_eq!(
+        recovered.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Materialized
+    );
 }
 
 #[test]
