@@ -12,8 +12,8 @@ use art_domain::{
     ArtError, ArtResult,
     agent::AgentId,
     knowledge::{
-        KnowledgeDraft, KnowledgeProposal, ProposalSourceLock, ProposalStatus, ReviewActor,
-        RiskLevel, proposal_source_set_hash,
+        DelegatedAuthorizationBasis, DelegatedReviewIdentity, KnowledgeDraft, KnowledgeProposal,
+        ProposalSourceLock, ProposalStatus, ReviewActor, RiskLevel, proposal_source_set_hash,
     },
     memory::canonical_json_hash,
 };
@@ -54,6 +54,22 @@ pub struct EditionRecord {
     pub markdown_sha256: String,
     pub manifest_sha256: String,
     pub published_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegatedGovernanceReceipt {
+    pub id: String,
+    pub operation: String,
+    pub proposal_id: String,
+    pub proposal_revision: u32,
+    pub edition_id: Option<String>,
+    pub actor_type: String,
+    pub agent_id: String,
+    pub host_binding_hash: String,
+    pub authorization_basis: DelegatedAuthorizationBasis,
+    pub source_set_hash: String,
+    pub draft_hash: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +183,7 @@ impl KnowledgeVault {
              CREATE TABLE IF NOT EXISTS knowledge_navigation_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), source_epoch TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS delegation_policies (host_binding_hash TEXT NOT NULL, agent_id TEXT NOT NULL, mode TEXT NOT NULL, enabled_at TEXT, updated_at TEXT NOT NULL, updated_via TEXT NOT NULL, PRIMARY KEY(host_binding_hash,agent_id));
              CREATE TABLE IF NOT EXISTS delegation_policy_events (id TEXT PRIMARY KEY, host_binding_hash TEXT NOT NULL, agent_id TEXT NOT NULL, previous_mode TEXT NOT NULL, new_mode TEXT NOT NULL, changed_via TEXT NOT NULL, changed_at TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS delegated_governance_receipts (id TEXT PRIMARY KEY, operation TEXT NOT NULL, proposal_id TEXT NOT NULL, proposal_revision INTEGER NOT NULL, edition_id TEXT, actor_type TEXT NOT NULL, agent_id TEXT NOT NULL, host_binding_hash TEXT NOT NULL, authorization_basis TEXT NOT NULL, source_set_hash TEXT NOT NULL, draft_hash TEXT NOT NULL, created_at TEXT NOT NULL);
              CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(edition_id UNINDEXED,search_text,tokenize='unicode61');
              CREATE INDEX IF NOT EXISTS edition_current ON edition_projections(knowledge_key, current, revoked);",
         ).map_err(db_error)?;
@@ -500,7 +517,7 @@ impl KnowledgeVault {
     }
 
     pub fn publish(&self, id: &str, revision: u32, confirm: bool) -> ArtResult<EditionRecord> {
-        self.publish_guarded(id, revision, confirm, None, None)
+        self.publish_guarded(id, revision, confirm, None, None, None)
     }
 
     pub fn next_edition_number(&self, knowledge_key: &str) -> ArtResult<u32> {
@@ -526,7 +543,64 @@ impl KnowledgeVault {
             confirm,
             Some(snapshot),
             Some(expected_edition_number),
+            None,
         )
+    }
+
+    pub fn approve_and_publish_delegated_exact(
+        &self,
+        snapshot: &GovernanceSnapshot,
+        actor: ReviewActor,
+        host_binding_hash: &str,
+    ) -> ArtResult<EditionRecord> {
+        validate_host_binding_hash(host_binding_hash)?;
+        let ReviewActor::AgentDelegated(identity) = actor else {
+            return Err(ArtError::PermissionDenied(
+                "delegated publication requires an AgentDelegated actor".into(),
+            ));
+        };
+        if identity.host_binding_hash != host_binding_hash {
+            return Err(ArtError::IdentityMismatch);
+        }
+        self.publish_guarded(
+            &snapshot.proposal_id,
+            snapshot.revision,
+            true,
+            Some(snapshot),
+            None,
+            Some(&identity),
+        )
+    }
+
+    pub fn delegated_receipts(
+        &self,
+        proposal_id: &str,
+    ) -> ArtResult<Vec<DelegatedGovernanceReceipt>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id,operation,proposal_id,proposal_revision,edition_id,actor_type,agent_id,host_binding_hash,authorization_basis,source_set_hash,draft_hash,created_at FROM delegated_governance_receipts WHERE proposal_id=?1 ORDER BY CASE operation WHEN 'approve' THEN 0 ELSE 1 END,id",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([proposal_id], |row| {
+                Ok(DelegatedGovernanceReceipt {
+                    id: row.get(0)?,
+                    operation: row.get(1)?,
+                    proposal_id: row.get(2)?,
+                    proposal_revision: row.get(3)?,
+                    edition_id: row.get(4)?,
+                    actor_type: row.get(5)?,
+                    agent_id: row.get(6)?,
+                    host_binding_hash: row.get(7)?,
+                    authorization_basis: DelegatedAuthorizationBasis::CurrentUserInstruction,
+                    source_set_hash: row.get(9)?,
+                    draft_hash: row.get(10)?,
+                    created_at: row.get(11)?,
+                })
+            })
+            .map_err(db_error)?;
+        rows.collect::<Result<_, _>>().map_err(db_error)
     }
 
     fn publish_guarded(
@@ -536,6 +610,7 @@ impl KnowledgeVault {
         confirm: bool,
         expected: Option<&GovernanceSnapshot>,
         expected_edition_number: Option<u32>,
+        delegated: Option<&DelegatedReviewIdentity>,
     ) -> ArtResult<EditionRecord> {
         if !confirm {
             return Err(ArtError::PermissionDenied(
@@ -555,16 +630,41 @@ impl KnowledgeVault {
         {
             return Err(ArtError::SourceStale);
         }
-        if proposal.status != ProposalStatus::Approved || proposal.revision != revision {
+        if proposal.revision != revision {
+            return Err(ArtError::SourceStale);
+        }
+        if let Some(identity) = delegated {
+            if proposal.status != ProposalStatus::Submitted {
+                return Err(ArtError::InvalidStateTransition);
+            }
+            if identity.agent_id != proposal.author_agent_id {
+                return Err(ArtError::IdentityMismatch);
+            }
+            let mode = reservation
+                .query_row(
+                    "SELECT mode FROM delegation_policies WHERE host_binding_hash=?1 AND agent_id=?2",
+                    params![identity.host_binding_hash, identity.agent_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if mode.as_deref() != Some(DelegationMode::DelegatedLocal.as_str()) {
+                return Err(ArtError::PermissionDenied(
+                    "delegated governance is disabled for this Agent and host".into(),
+                ));
+            }
+        } else if proposal.status != ProposalStatus::Approved {
             return Err(ArtError::InvalidStateTransition);
         }
         let already_reserved: bool = reservation.query_row("SELECT EXISTS(SELECT 1 FROM publication_reservations WHERE proposal_id=?1 AND proposal_revision=?2)", params![id, revision], |row| row.get(0)).map_err(db_error)?;
         if already_reserved {
             return Err(ArtError::InvalidStateTransition);
         }
-        let review_hash: Option<String> = reservation.query_row("SELECT source_set_hash FROM proposal_reviews WHERE proposal_id=?1 AND proposal_revision=?2 AND decision='approved' ORDER BY decided_at DESC LIMIT 1", params![id,revision], |row| row.get(0)).optional().map_err(db_error)?;
-        if review_hash.as_deref() != Some(&proposal.source_set_hash) {
-            return Err(ArtError::SourceStale);
+        if delegated.is_none() {
+            let review_hash: Option<String> = reservation.query_row("SELECT source_set_hash FROM proposal_reviews WHERE proposal_id=?1 AND proposal_revision=?2 AND decision='approved' ORDER BY decided_at DESC LIMIT 1", params![id,revision], |row| row.get(0)).optional().map_err(db_error)?;
+            if review_hash.as_deref() != Some(&proposal.source_set_hash) {
+                return Err(ArtError::SourceStale);
+            }
         }
         let edition_number: u32 = reservation.query_row("SELECT COALESCE(MAX(edition_number),0)+1 FROM (SELECT edition_number FROM edition_projections WHERE knowledge_key=?1 UNION ALL SELECT edition_number FROM publication_reservations WHERE knowledge_key=?1)", [&proposal.draft.knowledge_key], |row| row.get(0)).map_err(db_error)?;
         if expected_edition_number.is_some_and(|expected| expected != edition_number) {
@@ -640,6 +740,29 @@ impl KnowledgeVault {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(db_error)?;
+            if let Some(identity) = delegated {
+                let current = Self::proposal_on(&transaction, id)?;
+                if GovernanceSnapshot::from_proposal(&current)
+                    != *expected.ok_or_else(|| {
+                        ArtError::Internal("delegated publication requires exact snapshot".into())
+                    })?
+                {
+                    return Err(ArtError::SourceStale);
+                }
+                let mode = transaction
+                    .query_row(
+                        "SELECT mode FROM delegation_policies WHERE host_binding_hash=?1 AND agent_id=?2",
+                        params![identity.host_binding_hash, identity.agent_id.as_str()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(db_error)?;
+                if mode.as_deref() != Some(DelegationMode::DelegatedLocal.as_str()) {
+                    return Err(ArtError::PermissionDenied(
+                        "delegated governance was disabled before publication committed".into(),
+                    ));
+                }
+            }
             transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![edition_id,proposal.draft.knowledge_key,edition_number,proposal.draft.title,stored_markdown_path,stored_manifest_path,markdown_sha256,manifest_sha256,published_at]).map_err(db_error)?;
             transaction.execute(
             "UPDATE edition_projections SET current=CASE WHEN edition_number=(SELECT MAX(edition_number) FROM edition_projections WHERE knowledge_key=?1 AND revoked=0) THEN 1 ELSE 0 END WHERE knowledge_key=?1",
@@ -651,15 +774,33 @@ impl KnowledgeVault {
                     params![edition_id, search_document(&markdown)],
                 )
                 .map_err(db_error)?;
+            let prior_status = if delegated.is_some() {
+                "submitted"
+            } else {
+                "approved"
+            };
             if transaction
-            .execute(
-                "UPDATE knowledge_proposals SET status='materialized',updated_at=?3 WHERE id=?1 AND revision=?2 AND status='approved'",
-                params![id, revision, Utc::now().to_rfc3339()],
-            )
-            .map_err(db_error)? == 0
-        {
-            return Err(ArtError::SourceStale);
-        }
+                .execute(
+                    "UPDATE knowledge_proposals SET status='materialized',updated_at=?3 WHERE id=?1 AND revision=?2 AND status=?4",
+                    params![id, revision, Utc::now().to_rfc3339(), prior_status],
+                )
+                .map_err(db_error)?
+                == 0
+            {
+                return Err(ArtError::SourceStale);
+            }
+            if let Some(identity) = delegated {
+                let draft_hash = canonical_json_hash(
+                    &serde_json::to_value(&proposal.draft).map_err(internal_error)?,
+                );
+                let created_at = Utc::now().to_rfc3339();
+                for operation in ["approve", "publish"] {
+                    transaction.execute(
+                        "INSERT INTO delegated_governance_receipts(id,operation,proposal_id,proposal_revision,edition_id,actor_type,agent_id,host_binding_hash,authorization_basis,source_set_hash,draft_hash,created_at) VALUES (?1,?2,?3,?4,?5,'agent_delegated',?6,?7,'current_user_instruction',?8,?9,?10)",
+                        params![format!("artdr_{}", Ulid::new()), operation, id, revision, edition_id, identity.agent_id.as_str(), identity.host_binding_hash, proposal.source_set_hash, draft_hash, created_at],
+                    ).map_err(db_error)?;
+                }
+            }
             transaction
                 .execute(
                     "UPDATE publish_intents SET state='committed',updated_at=?2 WHERE id=?1",
@@ -1801,9 +1942,7 @@ fn parse_delegation_mode(value: &str) -> ArtResult<DelegationMode> {
     match value {
         "human_review" => Ok(DelegationMode::HumanReview),
         "delegated_local" => Ok(DelegationMode::DelegatedLocal),
-        _ => Err(ArtError::Internal(
-            "unknown delegation policy mode".into(),
-        )),
+        _ => Err(ArtError::Internal("unknown delegation policy mode".into())),
     }
 }
 #[allow(clippy::needless_pass_by_value)]

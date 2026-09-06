@@ -4,11 +4,11 @@ use art_domain::agent::{AgentId, ArtPaths};
 use art_domain::anchor::{
     AnchorKind, AssuranceDecision, AssuranceOutcome, SourceAnchor, anchor_set_hash,
 };
+use art_domain::knowledge::{DelegatedAuthorizationBasis, ReviewActor};
 use art_domain::memory::{
     DecisionPayload, EpisodePayload, MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus,
     ProcedurePayload, SemanticPayload, Sensitivity,
 };
-use art_domain::knowledge::{DelegatedAuthorizationBasis, ReviewActor};
 use chrono::Utc;
 use proptest::prelude::*;
 use serde_json::json;

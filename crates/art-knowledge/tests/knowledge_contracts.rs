@@ -4,8 +4,8 @@ use art_domain::{
     ArtError,
     agent::AgentId,
     knowledge::{
-        KnowledgeDraft, ProposalSourceLock, ProposalSourceType, ProposalStatus, ReviewActor,
-        RiskLevel,
+        DelegatedAuthorizationBasis, KnowledgeDraft, ProposalSourceLock, ProposalSourceType,
+        ProposalStatus, ReviewActor, RiskLevel,
     },
     memory::Sensitivity,
 };
@@ -87,6 +87,186 @@ fn delegation_policy_defaults_off_persists_and_stays_identity_scoped() {
             .delegation_mode(&codex, "not-a-binding-hash")
             .is_err()
     );
+}
+
+fn delegated_actor(agent: &AgentId, host_hash: &str) -> ReviewActor {
+    ReviewActor::agent_delegated(
+        agent.clone(),
+        host_hash.to_owned(),
+        DelegatedAuthorizationBasis::CurrentUserInstruction,
+    )
+    .unwrap()
+}
+
+#[test]
+fn delegated_publish_requires_enabled_bound_policy_and_exact_snapshot() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let host_hash = "d".repeat(64);
+    let vault = KnowledgeVault::open(root.path(), [51_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("delegated.disabled", "Delegated", "bounded body"),
+            vec![source(&agent)],
+            "delegated-disabled",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+
+    assert!(matches!(
+        vault.approve_and_publish_delegated_exact(
+            &snapshot,
+            delegated_actor(&agent, &host_hash),
+            &host_hash,
+        ),
+        Err(ArtError::PermissionDenied(_))
+    ));
+    assert_eq!(
+        vault.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Submitted
+    );
+    assert!(vault.delegated_receipts(&proposal.id).unwrap().is_empty());
+
+    vault
+        .set_delegation_mode(
+            &agent,
+            &host_hash,
+            DelegationMode::DelegatedLocal,
+            "local_governance_ui",
+        )
+        .unwrap();
+    let mut stale = snapshot.clone();
+    stale.draft_hash = "0".repeat(64);
+    assert!(matches!(
+        vault.approve_and_publish_delegated_exact(
+            &stale,
+            delegated_actor(&agent, &host_hash),
+            &host_hash,
+        ),
+        Err(ArtError::SourceStale)
+    ));
+    assert_eq!(
+        vault.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Submitted
+    );
+}
+
+#[test]
+fn delegated_publish_materializes_every_risk_with_distinct_linked_receipts() {
+    for (index, risk) in [RiskLevel::Normal, RiskLevel::Elevated, RiskLevel::High]
+        .into_iter()
+        .enumerate()
+    {
+        let root = tempdir().unwrap();
+        let agent = AgentId::from_str("codex-primary").unwrap();
+        let host_hash = "e".repeat(64);
+        let vault = KnowledgeVault::open(root.path(), [index as u8 + 52; 32]).unwrap();
+        vault
+            .set_delegation_mode(
+                &agent,
+                &host_hash,
+                DelegationMode::DelegatedLocal,
+                "local_governance_ui",
+            )
+            .unwrap();
+        let mut draft = KnowledgeDraft::minimal(
+            format!("delegated.risk-{index}"),
+            format!("Risk {index}"),
+            "bounded body",
+        );
+        draft.risk = risk;
+        let proposal = vault
+            .propose(
+                &agent,
+                draft,
+                vec![source(&agent)],
+                &format!("delegated-risk-{index}"),
+            )
+            .unwrap();
+        let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+
+        let edition = vault
+            .approve_and_publish_delegated_exact(
+                &snapshot,
+                delegated_actor(&agent, &host_hash),
+                &host_hash,
+            )
+            .unwrap();
+
+        assert_eq!(
+            vault.proposal(&proposal.id).unwrap().status,
+            ProposalStatus::Materialized
+        );
+        assert_eq!(
+            vault
+                .current(&proposal.draft.knowledge_key)
+                .unwrap()
+                .edition_id,
+            edition.edition_id
+        );
+        let receipts = vault.delegated_receipts(&proposal.id).unwrap();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[0].actor_type, "agent_delegated");
+        assert_eq!(receipts[0].host_binding_hash, host_hash);
+        assert_eq!(
+            receipts[0].edition_id.as_deref(),
+            Some(edition.edition_id.as_str())
+        );
+        assert_eq!(
+            receipts
+                .iter()
+                .map(|receipt| receipt.operation.as_str())
+                .collect::<Vec<_>>(),
+            vec!["approve", "publish"]
+        );
+    }
+}
+
+#[test]
+fn concurrent_delegated_publish_has_one_winner_and_no_approved_state() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let host_hash = "f".repeat(64);
+    let vault = Arc::new(KnowledgeVault::open(root.path(), [55_u8; 32]).unwrap());
+    vault
+        .set_delegation_mode(
+            &agent,
+            &host_hash,
+            DelegationMode::DelegatedLocal,
+            "local_governance_ui",
+        )
+        .unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("delegated.concurrent", "Concurrent", "one winner"),
+            vec![source(&agent)],
+            "delegated-concurrent",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let vault = Arc::clone(&vault);
+            let snapshot = snapshot.clone();
+            let actor = delegated_actor(&agent, &host_hash);
+            let host_hash = host_hash.clone();
+            std::thread::spawn(move || {
+                vault.approve_and_publish_delegated_exact(&snapshot, actor, &host_hash)
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        vault.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Materialized
+    );
+    assert_eq!(vault.delegated_receipts(&proposal.id).unwrap().len(), 2);
 }
 
 fn published_fixture(
