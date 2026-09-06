@@ -26,8 +26,24 @@ assert "full_scan" in skill and "semantic" in skill and "hybrid" in skill
 assert "optional" in skill
 assert "art_knowledge_governance" in skill
 assert "Elicitation" in skill
-assert "ordinary chat" in skill
-assert "CLI" in skill and "fallback" in skill
+for phrase in [
+    "art_governance_ui_open",
+    "delegated_local",
+    "approve_and_publish",
+    "AgentDelegated",
+    "default-off",
+    "unambiguous",
+]:
+    assert phrase in skill, phrase
+assert "CLI fallback" not in skill
+for integration in [
+    root.parents[1] / "integrations/codex/art-recall/SKILL.md",
+    root.parents[1] / "integrations/dsh/art-recall/SKILL.md",
+]:
+    content = integration.read_text()
+    for phrase in ["art_governance_ui_open", "delegated_local", "approve_and_publish", "AgentDelegated"]:
+        assert phrase in content, (integration, phrase)
+    assert "CLI fallback" not in content
 policy = (root / "skills/agent-recall-trail/agents/openai.yaml").read_text()
 assert "allow_implicit_invocation: true" in policy
 bundle_manifest = json.loads((root.parents[1] / "packaging/mcpb/manifest.json.in").read_text())
@@ -36,5 +52,5 @@ assert "art_knowledge_governance" in {tool["name"] for tool in bundle_manifest["
 PY
 
 python3 "$repo_root/tests/scripts/test_plugin_launch.py"
-cargo test -p art-mcp --test mcp_contracts tool_surface_is_exactly_seven_agent_safe_tools
+cargo test -p art-mcp --test mcp_contracts tool_surface_is_exactly_eight_agent_safe_tools
 echo 'plugin surface contract passed'

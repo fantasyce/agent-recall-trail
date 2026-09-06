@@ -31,7 +31,19 @@ Use the configured `art_*` MCP tools as the only interface to ART memory and kno
 - Capture only reusable, non-obvious experience with a typed payload, narrow scope, sensitivity, idempotency key, and verifiable source anchor.
 - Do not store secrets, raw transcripts, credentials, or third-party text without an allowed source anchor.
 - Propose shared knowledge only when it is stable, sanitized, broadly useful, and bound to exact source revisions.
-- An Agent may create a proposal but must never approve, publish, revoke, or supersede a Knowledge Edition.
+- Read `art_health.governance_mode` before governance. The default-off
+  `human_review` mode requires `art_governance_ui_open`; open its loopback URL
+  in the Codex in-app browser so the person can review, publish, inspect audit,
+  or change the persistent setting without a shell workflow.
+- In `delegated_local`, one unambiguous current user request to promote the
+  cited memory authorizes one `art_knowledge_governance` call with
+  `operation=approve_and_publish`. Supply only Proposal ID and revision. ART
+  derives authority fields and records `AgentDelegated`; Full Access alone is
+  not authorization.
+- If intent is ambiguous, ask before proposing or governing. Never direct the
+  person to a terminal for governance.
+- An Agent must never perform human governance or label itself Human, and must
+  never revoke or supersede a Knowledge Edition.
 - Provide relevant/stale/conflict/unsafe feedback without silently changing stored content.
 
 ## Failure behavior
