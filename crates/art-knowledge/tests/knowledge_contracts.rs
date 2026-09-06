@@ -1,4 +1,4 @@
-use std::{process::Command, str::FromStr};
+use std::{process::Command, str::FromStr, sync::Arc};
 
 use art_domain::{
     ArtError,
@@ -9,7 +9,7 @@ use art_domain::{
     },
     memory::Sensitivity,
 };
-use art_knowledge::KnowledgeVault;
+use art_knowledge::{GovernanceSnapshot, KnowledgeVault};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
@@ -257,6 +257,149 @@ fn stale_source_invalidates_review_and_blocks_publish() {
         vault.publish(&proposal.id, 1, true),
         Err(ArtError::SourceStale)
     ));
+}
+
+#[test]
+fn a_materialized_proposal_is_terminal_and_cannot_be_reviewed_again() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [41_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("terminal.proposal", "Terminal", "one edition only"),
+            vec![source(&agent)],
+            "terminal-proposal",
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "approved once",
+        )
+        .unwrap();
+    vault
+        .publish(&proposal.id, proposal.revision, true)
+        .unwrap();
+    assert!(matches!(
+        vault.review(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "approved",
+            "attempted replay",
+        ),
+        Err(ArtError::InvalidStateTransition)
+    ));
+    assert!(matches!(
+        vault.publish(&proposal.id, proposal.revision, true),
+        Err(ArtError::InvalidStateTransition)
+    ));
+}
+
+#[test]
+fn concurrent_exact_reviews_use_atomic_snapshot_compare_and_swap() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = Arc::new(KnowledgeVault::open(root.path(), [42_u8; 32]).unwrap());
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("atomic.review", "Atomic review", "review once"),
+            vec![source(&agent)],
+            "atomic-review",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+    let handles: Vec<_> = ["reviewer-a", "reviewer-b"]
+        .into_iter()
+        .map(|actor| {
+            let vault = Arc::clone(&vault);
+            let snapshot = snapshot.clone();
+            std::thread::spawn(move || {
+                vault.review_exact(
+                    &snapshot,
+                    ReviewActor::Human(actor.into()),
+                    "approved",
+                    "concurrent exact review",
+                )
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(ArtError::SourceStale)))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn concurrent_same_key_publications_must_reconfirm_the_atomically_reserved_number() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = Arc::new(KnowledgeVault::open(root.path(), [43_u8; 32]).unwrap());
+    let proposals: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|suffix| {
+            let proposal = vault
+                .propose(
+                    &agent,
+                    KnowledgeDraft::minimal("atomic.publish", format!("Edition {suffix}"), suffix),
+                    vec![source(&agent)],
+                    &format!("atomic-publish-{suffix}"),
+                )
+                .unwrap();
+            vault
+                .approve(
+                    &proposal.id,
+                    proposal.revision,
+                    ReviewActor::Human("local-user".into()),
+                    "approved",
+                )
+                .unwrap();
+            GovernanceSnapshot::from_proposal(&vault.proposal(&proposal.id).unwrap())
+        })
+        .collect();
+    assert_eq!(vault.next_edition_number("atomic.publish").unwrap(), 1);
+    let handles: Vec<_> = proposals
+        .iter()
+        .cloned()
+        .map(|snapshot| {
+            let vault = Arc::clone(&vault);
+            std::thread::spawn(move || vault.publish_exact(&snapshot, 1, true))
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(ArtError::SourceStale)))
+            .count(),
+        1
+    );
+    assert_eq!(vault.next_edition_number("atomic.publish").unwrap(), 2);
+    let remaining = proposals
+        .iter()
+        .find(|snapshot| {
+            vault.proposal(&snapshot.proposal_id).unwrap().status == ProposalStatus::Approved
+        })
+        .unwrap();
+    let second = vault.publish_exact(remaining, 2, true).unwrap();
+    assert_eq!(second.edition_number, 2);
+    assert_eq!(vault.current("atomic.publish").unwrap().edition_number, 2);
 }
 
 #[test]

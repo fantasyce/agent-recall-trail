@@ -18,7 +18,7 @@ use art_domain::{
     memory::canonical_json_hash,
 };
 use chrono::Utc;
-use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
@@ -38,6 +38,30 @@ pub struct EditionRecord {
     pub markdown_sha256: String,
     pub manifest_sha256: String,
     pub published_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernanceSnapshot {
+    pub proposal_id: String,
+    pub revision: u32,
+    pub status: ProposalStatus,
+    pub source_set_hash: String,
+    pub draft_hash: String,
+}
+
+impl GovernanceSnapshot {
+    #[must_use]
+    pub fn from_proposal(proposal: &KnowledgeProposal) -> Self {
+        Self {
+            proposal_id: proposal.id.clone(),
+            revision: proposal.revision,
+            status: proposal.status,
+            source_set_hash: proposal.source_set_hash.clone(),
+            draft_hash: canonical_json_hash(
+                &serde_json::to_value(&proposal.draft).expect("knowledge draft serializes"),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +143,7 @@ impl KnowledgeVault {
              CREATE TABLE IF NOT EXISTS knowledge_proposals (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, author_agent_id TEXT NOT NULL, draft_json TEXT NOT NULL, sources_json TEXT NOT NULL, source_set_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS proposal_reviews (id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL, proposal_revision INTEGER NOT NULL, source_set_hash TEXT NOT NULL, decision TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL, decided_at TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS publish_intents (id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL, proposal_revision INTEGER NOT NULL, edition_id TEXT NOT NULL, target_dir TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS publication_reservations (proposal_id TEXT NOT NULL, proposal_revision INTEGER NOT NULL, knowledge_key TEXT NOT NULL, edition_number INTEGER NOT NULL, edition_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, PRIMARY KEY(proposal_id,proposal_revision), UNIQUE(knowledge_key,edition_number));
              CREATE TABLE IF NOT EXISTS event_intents (id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, edition_id TEXT NOT NULL, target_path TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS edition_projections (edition_id TEXT PRIMARY KEY, knowledge_key TEXT NOT NULL, edition_number INTEGER NOT NULL, title TEXT NOT NULL, markdown_path TEXT NOT NULL, manifest_path TEXT NOT NULL, markdown_sha256 TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, published_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, current INTEGER NOT NULL DEFAULT 1);
              CREATE TABLE IF NOT EXISTS knowledge_events (event_id TEXT PRIMARY KEY, event_hash TEXT NOT NULL, schema TEXT NOT NULL, edition_id TEXT NOT NULL, applied_at TEXT NOT NULL);
@@ -205,6 +230,10 @@ impl KnowledgeVault {
 
     pub fn proposal(&self, id: &str) -> ArtResult<KnowledgeProposal> {
         let connection = self.connection()?;
+        Self::proposal_on(&connection, id)
+    }
+
+    fn proposal_on(connection: &Connection, id: &str) -> ArtResult<KnowledgeProposal> {
         let row: Option<ProposalRow> = connection.query_row("SELECT revision,status,author_agent_id,draft_json,sources_json,source_set_hash,created_at,updated_at FROM knowledge_proposals WHERE id=?1", [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional().map_err(db_error)?;
         let (revision, status, author, draft, sources, source_set_hash, created, updated) =
             row.ok_or(ArtError::NotFound)?;
@@ -255,6 +284,35 @@ impl KnowledgeVault {
         decision: &str,
         reason: &str,
     ) -> ArtResult<()> {
+        self.review_guarded(id, revision, actor, decision, reason, None)
+    }
+
+    pub fn review_exact(
+        &self,
+        snapshot: &GovernanceSnapshot,
+        actor: ReviewActor,
+        decision: &str,
+        reason: &str,
+    ) -> ArtResult<()> {
+        self.review_guarded(
+            &snapshot.proposal_id,
+            snapshot.revision,
+            actor,
+            decision,
+            reason,
+            Some(snapshot),
+        )
+    }
+
+    fn review_guarded(
+        &self,
+        id: &str,
+        revision: u32,
+        actor: ReviewActor,
+        decision: &str,
+        reason: &str,
+        expected: Option<&GovernanceSnapshot>,
+    ) -> ArtResult<()> {
         let actor_id = match actor {
             ReviewActor::Human(id) if !id.trim().is_empty() => id,
             ReviewActor::Human(_) => {
@@ -266,9 +324,24 @@ impl KnowledgeVault {
                 ));
             }
         };
-        let proposal = self.proposal(id)?;
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let proposal = Self::proposal_on(&transaction, id)?;
         if proposal.revision != revision || proposal.status == ProposalStatus::Stale {
             return Err(ArtError::SourceStale);
+        }
+        if expected
+            .is_some_and(|snapshot| GovernanceSnapshot::from_proposal(&proposal) != *snapshot)
+        {
+            return Err(ArtError::SourceStale);
+        }
+        if !matches!(
+            proposal.status,
+            ProposalStatus::Submitted | ProposalStatus::UnderReview
+        ) {
+            return Err(ArtError::InvalidStateTransition);
         }
         if reason.trim().is_empty() {
             return Err(ArtError::InvalidInput("review reason is required".into()));
@@ -281,7 +354,6 @@ impl KnowledgeVault {
                 return Err(ArtError::InvalidInput("invalid review decision".into()));
             }
         };
-        let connection = self.connection()?;
         if decision == "approved" {
             let unsafe_body = proposal.draft.markdown.to_ascii_lowercase();
             if unsafe_body.contains("ignore previous") || unsafe_body.contains("忽略之前") {
@@ -300,7 +372,7 @@ impl KnowledgeVault {
                 .len()
                 < 2;
         let prior_independent_approval: bool = if needs_second_human {
-            connection.query_row(
+            transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM proposal_reviews WHERE proposal_id=?1 AND proposal_revision=?2 AND source_set_hash=?3 AND decision='approved' AND actor!=?4)",
                 params![id,revision,proposal.source_set_hash,actor_id],
                 |row| row.get(0),
@@ -308,18 +380,19 @@ impl KnowledgeVault {
         } else {
             true
         };
-        connection.execute("INSERT INTO proposal_reviews(id,proposal_id,proposal_revision,source_set_hash,decision,actor,reason,decided_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![format!("artr_{}",Ulid::new()),id,revision,proposal.source_set_hash,decision,actor_id,reason,Utc::now().to_rfc3339()]).map_err(db_error)?;
+        transaction.execute("INSERT INTO proposal_reviews(id,proposal_id,proposal_revision,source_set_hash,decision,actor,reason,decided_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![format!("artr_{}",Ulid::new()),id,revision,proposal.source_set_hash,decision,actor_id,reason,Utc::now().to_rfc3339()]).map_err(db_error)?;
         let next_status = if needs_second_human && !prior_independent_approval {
             "under_review"
         } else {
             next_status
         };
-        connection
+        transaction
             .execute(
                 "UPDATE knowledge_proposals SET status=?2,updated_at=?3 WHERE id=?1",
                 params![id, next_status, Utc::now().to_rfc3339()],
             )
             .map_err(db_error)?;
+        transaction.commit().map_err(db_error)?;
         Ok(())
     }
 
@@ -342,24 +415,76 @@ impl KnowledgeVault {
     }
 
     pub fn publish(&self, id: &str, revision: u32, confirm: bool) -> ArtResult<EditionRecord> {
+        self.publish_guarded(id, revision, confirm, None, None)
+    }
+
+    pub fn next_edition_number(&self, knowledge_key: &str) -> ArtResult<u32> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT COALESCE(MAX(edition_number),0)+1 FROM (SELECT edition_number FROM edition_projections WHERE knowledge_key=?1 UNION ALL SELECT edition_number FROM publication_reservations WHERE knowledge_key=?1)",
+                [knowledge_key],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
+    }
+
+    pub fn publish_exact(
+        &self,
+        snapshot: &GovernanceSnapshot,
+        expected_edition_number: u32,
+        confirm: bool,
+    ) -> ArtResult<EditionRecord> {
+        self.publish_guarded(
+            &snapshot.proposal_id,
+            snapshot.revision,
+            confirm,
+            Some(snapshot),
+            Some(expected_edition_number),
+        )
+    }
+
+    fn publish_guarded(
+        &self,
+        id: &str,
+        revision: u32,
+        confirm: bool,
+        expected: Option<&GovernanceSnapshot>,
+        expected_edition_number: Option<u32>,
+    ) -> ArtResult<EditionRecord> {
         if !confirm {
             return Err(ArtError::PermissionDenied(
                 "publishing requires explicit confirmation".into(),
             ));
         }
-        let proposal = self.proposal(id)?;
+        let mut connection = self.connection()?;
+        let reservation = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let proposal = Self::proposal_on(&reservation, id)?;
         if proposal.status == ProposalStatus::Stale {
+            return Err(ArtError::SourceStale);
+        }
+        if expected
+            .is_some_and(|snapshot| GovernanceSnapshot::from_proposal(&proposal) != *snapshot)
+        {
             return Err(ArtError::SourceStale);
         }
         if proposal.status != ProposalStatus::Approved || proposal.revision != revision {
             return Err(ArtError::InvalidStateTransition);
         }
-        let mut connection = self.connection()?;
-        let review_hash: Option<String> = connection.query_row("SELECT source_set_hash FROM proposal_reviews WHERE proposal_id=?1 AND proposal_revision=?2 AND decision='approved' ORDER BY decided_at DESC LIMIT 1", params![id,revision], |row| row.get(0)).optional().map_err(db_error)?;
+        let already_reserved: bool = reservation.query_row("SELECT EXISTS(SELECT 1 FROM publication_reservations WHERE proposal_id=?1 AND proposal_revision=?2)", params![id, revision], |row| row.get(0)).map_err(db_error)?;
+        if already_reserved {
+            return Err(ArtError::InvalidStateTransition);
+        }
+        let review_hash: Option<String> = reservation.query_row("SELECT source_set_hash FROM proposal_reviews WHERE proposal_id=?1 AND proposal_revision=?2 AND decision='approved' ORDER BY decided_at DESC LIMIT 1", params![id,revision], |row| row.get(0)).optional().map_err(db_error)?;
         if review_hash.as_deref() != Some(&proposal.source_set_hash) {
             return Err(ArtError::SourceStale);
         }
-        let edition_number: u32 = connection.query_row("SELECT COALESCE(MAX(edition_number),0)+1 FROM edition_projections WHERE knowledge_key=?1", [&proposal.draft.knowledge_key], |row| row.get(0)).map_err(db_error)?;
+        let edition_number: u32 = reservation.query_row("SELECT COALESCE(MAX(edition_number),0)+1 FROM (SELECT edition_number FROM edition_projections WHERE knowledge_key=?1 UNION ALL SELECT edition_number FROM publication_reservations WHERE knowledge_key=?1)", [&proposal.draft.knowledge_key], |row| row.get(0)).map_err(db_error)?;
+        if expected_edition_number.is_some_and(|expected| expected != edition_number) {
+            return Err(ArtError::SourceStale);
+        }
         let edition_id = format!("arke_{}", Ulid::new());
         let target_dir = self
             .root
@@ -369,7 +494,10 @@ impl KnowledgeVault {
         fs::create_dir_all(&target_dir).map_err(io_error)?;
         set_private_directory(&target_dir)?;
         let intent_id = format!("arti_{}", Ulid::new());
-        connection.execute("INSERT INTO publish_intents(id,proposal_id,proposal_revision,edition_id,target_dir,state,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,'prepared',?6,?6)", params![intent_id,id,revision,edition_id,target_dir.to_string_lossy(),Utc::now().to_rfc3339()]).map_err(db_error)?;
+        let reserved_at = Utc::now().to_rfc3339();
+        reservation.execute("INSERT INTO publication_reservations(proposal_id,proposal_revision,knowledge_key,edition_number,edition_id,created_at) VALUES (?1,?2,?3,?4,?5,?6)", params![id,revision,proposal.draft.knowledge_key,edition_number,edition_id,reserved_at]).map_err(db_error)?;
+        reservation.execute("INSERT INTO publish_intents(id,proposal_id,proposal_revision,edition_id,target_dir,state,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,'prepared',?6,?6)", params![intent_id,id,revision,edition_id,target_dir.to_string_lossy(),reserved_at]).map_err(db_error)?;
+        reservation.commit().map_err(db_error)?;
         let published_at = Utc::now().to_rfc3339();
         let body_hash = hex_digest(proposal.draft.markdown.as_bytes());
         let source_commitments = proposal
@@ -423,26 +551,29 @@ impl KnowledgeVault {
         }
         let stored_markdown_path = self.portable_projection_path(&markdown_path)?;
         let stored_manifest_path = self.portable_projection_path(&manifest_path)?;
-        let transaction = connection.transaction().map_err(db_error)?;
-        transaction
-            .execute(
-                "UPDATE edition_projections SET current=0 WHERE knowledge_key=?1",
-                [&proposal.draft.knowledge_key],
-            )
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
         transaction.execute("INSERT INTO edition_projections(edition_id,knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![edition_id,proposal.draft.knowledge_key,edition_number,proposal.draft.title,stored_markdown_path,stored_manifest_path,markdown_sha256,manifest_sha256,published_at]).map_err(db_error)?;
+        transaction.execute(
+            "UPDATE edition_projections SET current=CASE WHEN edition_number=(SELECT MAX(edition_number) FROM edition_projections WHERE knowledge_key=?1 AND revoked=0) THEN 1 ELSE 0 END WHERE knowledge_key=?1",
+            [&proposal.draft.knowledge_key],
+        ).map_err(db_error)?;
         transaction
             .execute(
                 "INSERT INTO knowledge_fts(edition_id,search_text) VALUES (?1,?2)",
                 params![edition_id, search_document(&markdown)],
             )
             .map_err(db_error)?;
-        transaction
+        if transaction
             .execute(
-                "UPDATE knowledge_proposals SET status='materialized',updated_at=?2 WHERE id=?1",
-                params![id, Utc::now().to_rfc3339()],
+                "UPDATE knowledge_proposals SET status='materialized',updated_at=?3 WHERE id=?1 AND revision=?2 AND status='approved'",
+                params![id, revision, Utc::now().to_rfc3339()],
             )
-            .map_err(db_error)?;
+            .map_err(db_error)? == 0
+        {
+            return Err(ArtError::SourceStale);
+        }
         transaction
             .execute(
                 "UPDATE publish_intents SET state='committed',updated_at=?2 WHERE id=?1",

@@ -23,7 +23,7 @@ use art_domain::{
         MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity, canonical_json_hash,
     },
 };
-use art_knowledge::KnowledgeVault;
+use art_knowledge::{GovernanceSnapshot, KnowledgeVault};
 use art_retrieval::{
     EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RankFusionPolicy, RecallDetail,
     RecallEngine, RecallRequest, RetrievalMode, SemanticRuntime, knowledge_semantic_path,
@@ -34,7 +34,7 @@ use rmcp::{
     Json, Peer, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema},
-    service::{ElicitationError, ElicitationMode},
+    service::ElicitationError,
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -140,29 +140,6 @@ struct PublishElicitationResponse {
     confirm: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProposalSnapshot {
-    id: String,
-    revision: u32,
-    status: ProposalStatus,
-    source_set_hash: String,
-    draft_hash: String,
-}
-
-impl ProposalSnapshot {
-    fn from_proposal(proposal: &KnowledgeProposal) -> Result<Self, String> {
-        let draft = serde_json::to_value(&proposal.draft)
-            .map_err(|error| tool_error(ArtError::Internal(error.to_string())))?;
-        Ok(Self {
-            id: proposal.id.clone(),
-            revision: proposal.revision,
-            status: proposal.status,
-            source_set_hash: proposal.source_set_hash.clone(),
-            draft_hash: canonical_json_hash(&draft),
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FeedbackInput {
     pub subject_ref: String,
@@ -198,10 +175,12 @@ impl ToolOutput {
 pub struct ArtMcpServer {
     tool_router: ToolRouter<Self>,
     agent_id: AgentId,
+    host_binding: String,
     private_vault: AgentVault,
     knowledge_vault: KnowledgeVault,
     recall_engine: RecallEngine,
     shutting_down: Arc<AtomicBool>,
+    elicitation_timeout: Duration,
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -214,13 +193,23 @@ impl ArtMcpServer {
         let private_vault = AgentVault::open(paths.agent_vault(&agent_id), agent_id.clone())?;
         let knowledge_vault = KnowledgeVault::open(paths.knowledge_vault(), commitment_key)?;
         let recall_engine = configured_recall_engine(paths, &private_vault, &knowledge_vault);
+        let profile_digest = fs::read(paths.agent_profile(&agent_id)).map_or_else(
+            |_| "profile-unavailable".into(),
+            |bytes| canonical_json_hash(&json!({"profile_bytes":bytes})),
+        );
+        let host_binding = canonical_json_hash(&json!({
+            "art_root": paths.root().to_string_lossy(),
+            "agent_profile": profile_digest,
+        }));
         Ok(Self {
             tool_router: Self::tool_router(),
             agent_id,
+            host_binding,
             private_vault,
             knowledge_vault,
             recall_engine,
             shutting_down: Arc::new(AtomicBool::new(false)),
+            elicitation_timeout: Duration::from_secs(300),
         })
     }
 
@@ -250,6 +239,11 @@ impl ArtMcpServer {
     #[doc(hidden)]
     pub fn test_only_begin_shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
+    }
+
+    #[doc(hidden)]
+    pub fn test_only_set_elicitation_timeout(&mut self, timeout: Duration) {
+        self.elicitation_timeout = timeout;
     }
 
     #[tool(
@@ -474,7 +468,15 @@ impl ArtMcpServer {
                 json!({"proposal_status": proposal.status}),
             );
         }
-        let snapshot = ProposalSnapshot::from_proposal(&proposal)?;
+        if let Some(reason_code) = self.source_revalidation_reason(&proposal) {
+            return governance_output(
+                &input,
+                "operator_action_required",
+                Some(reason_code),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        let snapshot = GovernanceSnapshot::from_proposal(&proposal);
         match input.operation {
             KnowledgeGovernanceOperation::Review => {
                 self.review_by_elicitation(&input, &proposal, &snapshot, &peer)
@@ -574,7 +576,7 @@ impl ArtMcpServer {
         &self,
         input: &KnowledgeGovernanceInput,
         proposal: &KnowledgeProposal,
-        snapshot: &ProposalSnapshot,
+        snapshot: &GovernanceSnapshot,
         peer: &Peer<RoleServer>,
     ) -> Result<Json<ToolOutput>, String> {
         if matches!(proposal.draft.risk, RiskLevel::Elevated | RiskLevel::High)
@@ -585,6 +587,14 @@ impl ArtMcpServer {
                 "operator_action_required",
                 Some("INDEPENDENT_REVIEW_REQUIRED"),
                 json!({"proposal_status": proposal.status}),
+            );
+        }
+        if proposal.status != ProposalStatus::Submitted {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("INVALID_GOVERNANCE_STATE"),
+                json!({"proposal_status":proposal.status}),
             );
         }
         let message = format!(
@@ -614,7 +624,14 @@ impl ArtMcpServer {
             .required_string_with("reason", |schema| schema.length(1, 1000))
             .build()
             .map_err(|error| tool_error(ArtError::Internal(error.into())))?;
-        let response = match elicit_form::<ReviewElicitationResponse>(peer, message, schema).await {
+        let response = match elicit_form::<ReviewElicitationResponse>(
+            peer,
+            message,
+            schema,
+            self.elicitation_timeout,
+        )
+        .await
+        {
             Ok(Some(response)) => response,
             Ok(None) | Err(ElicitationError::NoContent) => {
                 return governance_output(
@@ -674,7 +691,7 @@ impl ArtMcpServer {
                 json!({"proposal_status": proposal.status}),
             );
         }
-        if !self.snapshot_matches(snapshot)? {
+        if self.source_revalidation_reason(proposal).is_some() {
             return governance_output(
                 input,
                 "operator_action_required",
@@ -695,15 +712,29 @@ impl ArtMcpServer {
                 );
             }
         };
-        self.knowledge_vault
-            .review(
-                &proposal.id,
-                proposal.revision,
-                ReviewActor::Human(elicitation_actor(peer, &self.agent_id)),
-                decision,
-                reason,
-            )
-            .map_err(tool_error)?;
+        let review = self.knowledge_vault.review_exact(
+            snapshot,
+            ReviewActor::Human(elicitation_actor(peer, &self.agent_id, &self.host_binding)),
+            decision,
+            reason,
+        );
+        if let Err(error) = review {
+            return match error {
+                ArtError::SourceStale => governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("SOURCE_STALE"),
+                    json!({"proposal_status":"stale"}),
+                ),
+                ArtError::InvalidStateTransition => governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("INVALID_GOVERNANCE_STATE"),
+                    json!({"proposal_status":self.knowledge_vault.proposal(&proposal.id).map_err(tool_error)?.status}),
+                ),
+                other => Err(tool_error(other)),
+            };
+        }
         let updated = self
             .knowledge_vault
             .proposal(&proposal.id)
@@ -729,18 +760,31 @@ impl ArtMcpServer {
         &self,
         input: &KnowledgeGovernanceInput,
         proposal: &KnowledgeProposal,
-        snapshot: &ProposalSnapshot,
+        snapshot: &GovernanceSnapshot,
         peer: &Peer<RoleServer>,
     ) -> Result<Json<ToolOutput>, String> {
         if proposal.status != ProposalStatus::Approved {
-            return Err(tool_error(ArtError::InvalidStateTransition));
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("INVALID_GOVERNANCE_STATE"),
+                json!({"proposal_status":proposal.status}),
+            );
         }
+        let edition_number = self
+            .knowledge_vault
+            .next_edition_number(&proposal.draft.knowledge_key)
+            .map_err(tool_error)?;
         let message = format!(
-            "Confirm publication of this exact approved ART Knowledge Proposal as a shared immutable Edition.\n\nProposal ID: {}\nRevision: {}\nKnowledge key: {}\nTitle: {}\nSource-set hash: {}\nDraft hash: {}\n\nComplete approved Markdown:\n\n{}\n\nSet confirm=true only if this exact approved content should be published.",
+            "Confirm publication of this exact approved ART Knowledge Proposal as shared immutable Edition #{}.\n\nProposal ID: {}\nRevision: {}\nKnowledge key: {}\nTitle: {}\nApplicability: {}\nSensitivity: {:?}\nRisk: {:?}\nSource-set hash: {}\nDraft hash: {}\n\nComplete approved Markdown:\n\n{}\n\nSet confirm=true only if this exact approved content should be published.",
+            edition_number,
             proposal.id,
             proposal.revision,
             proposal.draft.knowledge_key,
             proposal.draft.title,
+            proposal.draft.applicability,
+            proposal.draft.sensitivity,
+            proposal.draft.risk,
             proposal.source_set_hash,
             snapshot.draft_hash,
             proposal.draft.markdown,
@@ -749,7 +793,13 @@ impl ArtMcpServer {
             .required_bool("confirm")
             .build()
             .map_err(|error| tool_error(ArtError::Internal(error.into())))?;
-        let response = match elicit_form::<PublishElicitationResponse>(peer, message, schema).await
+        let response = match elicit_form::<PublishElicitationResponse>(
+            peer,
+            message,
+            schema,
+            self.elicitation_timeout,
+        )
+        .await
         {
             Ok(Some(response)) => response,
             Ok(None) | Err(ElicitationError::NoContent) => {
@@ -809,7 +859,7 @@ impl ArtMcpServer {
                 json!({"proposal_status": proposal.status}),
             );
         }
-        if !self.snapshot_matches(snapshot)? {
+        if self.source_revalidation_reason(proposal).is_some() {
             return governance_output(
                 input,
                 "operator_action_required",
@@ -817,10 +867,29 @@ impl ArtMcpServer {
                 json!({"proposal_status": "stale"}),
             );
         }
-        let edition = self
+        let edition = match self
             .knowledge_vault
-            .publish(&proposal.id, proposal.revision, true)
-            .map_err(tool_error)?;
+            .publish_exact(snapshot, edition_number, true)
+        {
+            Ok(edition) => edition,
+            Err(ArtError::SourceStale) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("SOURCE_STALE"),
+                    json!({"proposal_status":"stale"}),
+                );
+            }
+            Err(ArtError::InvalidStateTransition | ArtError::DuplicateConflict) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("INVALID_GOVERNANCE_STATE"),
+                    json!({"proposal_status":self.knowledge_vault.proposal(&proposal.id).map_err(tool_error)?.status}),
+                );
+            }
+            Err(other) => return Err(tool_error(other)),
+        };
         governance_output(
             input,
             "published",
@@ -836,12 +905,29 @@ impl ArtMcpServer {
         )
     }
 
-    fn snapshot_matches(&self, snapshot: &ProposalSnapshot) -> Result<bool, String> {
-        let current = self
-            .knowledge_vault
-            .proposal(&snapshot.id)
-            .map_err(tool_error)?;
-        Ok(ProposalSnapshot::from_proposal(&current)? == *snapshot)
+    fn source_revalidation_reason(&self, proposal: &KnowledgeProposal) -> Option<&'static str> {
+        for source in &proposal.sources {
+            if source.source_type != ProposalSourceType::PrivateMemory
+                || source.owner_agent_id.as_ref() != Some(&self.agent_id)
+            {
+                return Some("SOURCE_REVALIDATION_UNAVAILABLE");
+            }
+            let Some(revision) = source.source_revision else {
+                return Some("SOURCE_STALE");
+            };
+            let Ok((memory, anchor_set_hash)) = self
+                .private_vault
+                .read_source_revision(&source.source_id, revision)
+            else {
+                return Some("SOURCE_STALE");
+            };
+            if memory.current_hash != source.source_content_hash
+                || source.anchor_set_hash.as_deref() != Some(anchor_set_hash.as_str())
+            {
+                return Some("SOURCE_STALE");
+            }
+        }
+        None
     }
 }
 
@@ -849,14 +935,18 @@ async fn elicit_form<T>(
     peer: &Peer<RoleServer>,
     message: String,
     requested_schema: ElicitationSchema,
+    timeout: Duration,
 ) -> Result<Option<T>, ElicitationError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    if !peer
-        .supported_elicitation_modes()
-        .contains(&ElicitationMode::Form)
-    {
+    let supports_explicit_form = peer.peer_info().is_some_and(|info| {
+        info.capabilities
+            .elicitation
+            .as_ref()
+            .is_some_and(|capability| capability.form.is_some())
+    });
+    if !supports_explicit_form {
         return Err(ElicitationError::CapabilityNotSupported);
     }
     let response: ElicitResult = peer
@@ -866,7 +956,7 @@ where
                 message,
                 requested_schema,
             },
-            Some(Duration::from_secs(300)),
+            Some(timeout),
         )
         .await
         .map_err(ElicitationError::Service)?;
@@ -885,7 +975,7 @@ where
     }
 }
 
-fn elicitation_actor(peer: &Peer<RoleServer>, agent_id: &AgentId) -> String {
+fn elicitation_actor(peer: &Peer<RoleServer>, agent_id: &AgentId, host_binding: &str) -> String {
     let client = peer.peer_info().map(|info| {
         json!({
             "name": info.client_info.name,
@@ -894,6 +984,7 @@ fn elicitation_actor(peer: &Peer<RoleServer>, agent_id: &AgentId) -> String {
     });
     let identity = canonical_json_hash(&json!({
         "agent_id": agent_id.as_str(),
+        "host_binding": host_binding,
         "client": client,
         "transport": "local_mcp_elicitation",
     }));

@@ -11,7 +11,7 @@ use rmcp::{
     ClientHandler, RoleClient, ServiceExt,
     model::{
         CallToolRequestParams, ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult,
-        ElicitationAction, Implementation,
+        ElicitationAction, ElicitationCapability, FormElicitationCapability, Implementation,
     },
     service::RequestContext,
 };
@@ -23,8 +23,10 @@ struct ElicitationClient {
     responses: Arc<Mutex<VecDeque<ElicitResult>>>,
     requests: Arc<Mutex<Vec<ElicitRequestParams>>>,
     supports_elicitation: bool,
+    empty_elicitation_capability: bool,
     stale_on_request: Option<usize>,
-    knowledge_db: PathBuf,
+    hang_on_request: Option<usize>,
+    private_db: PathBuf,
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -40,10 +42,21 @@ impl ClientHandler for ElicitationClient {
             requests.len()
         };
         if self.stale_on_request == Some(request_count) {
-            rusqlite::Connection::open(&self.knowledge_db)
-                .unwrap()
-                .execute("UPDATE knowledge_proposals SET status='stale'", [])
+            let connection = rusqlite::Connection::open(&self.private_db).unwrap();
+            let anchor_id: String = connection
+                .query_row(
+                    "SELECT id FROM source_anchors ORDER BY id LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap();
+            connection.execute(
+                "INSERT INTO source_events(id,anchor_id,event_type,new_digest,actor,reason,created_at) VALUES (?1,?2,'revoked',NULL,'test-human','source invalidated during elicitation',?3)",
+                rusqlite::params![format!("artse_test_{request_count}"), anchor_id, chrono::Utc::now().to_rfc3339()],
+            ).unwrap();
+        }
+        if self.hang_on_request == Some(request_count) {
+            return std::future::pending().await;
         }
         Ok(self
             .responses
@@ -56,6 +69,13 @@ impl ClientHandler for ElicitationClient {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
         info.capabilities = if self.supports_elicitation {
+            ClientCapabilities::builder()
+                .enable_elicitation_with(
+                    ElicitationCapability::new()
+                        .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+                )
+                .build()
+        } else if self.empty_elicitation_capability {
             ClientCapabilities::builder().enable_elicitation().build()
         } else {
             ClientCapabilities::default()
@@ -74,7 +94,11 @@ struct Harness {
 
 impl Harness {
     async fn start(supports_elicitation: bool, responses: Vec<ElicitResult>) -> Self {
-        Self::start_with_stale_request(supports_elicitation, responses, None).await
+        Self::start_with_options(supports_elicitation, false, responses, None, None).await
+    }
+
+    async fn start_empty_elicitation(responses: Vec<ElicitResult>) -> Self {
+        Self::start_with_options(false, true, responses, None, None).await
     }
 
     async fn start_with_stale_request(
@@ -82,23 +106,49 @@ impl Harness {
         responses: Vec<ElicitResult>,
         stale_on_request: Option<usize>,
     ) -> Self {
+        Self::start_with_options(
+            supports_elicitation,
+            false,
+            responses,
+            stale_on_request,
+            None,
+        )
+        .await
+    }
+
+    async fn start_with_timeout(responses: Vec<ElicitResult>) -> Self {
+        Self::start_with_options(true, false, responses, None, Some(1)).await
+    }
+
+    async fn start_with_options(
+        supports_elicitation: bool,
+        empty_elicitation_capability: bool,
+        responses: Vec<ElicitResult>,
+        stale_on_request: Option<usize>,
+        hang_on_request: Option<usize>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
-        let server = ArtMcpServer::open(
+        let mut server = ArtMcpServer::open(
             &paths,
             AgentId::from_str("codex-primary").unwrap(),
             [51; 32],
         )
         .unwrap();
+        if hang_on_request.is_some() {
+            server.test_only_set_elicitation_timeout(std::time::Duration::from_millis(25));
+        }
         let requests = Arc::new(Mutex::new(Vec::new()));
         let handler = ElicitationClient {
             responses: Arc::new(Mutex::new(responses.into())),
             requests: Arc::clone(&requests),
             supports_elicitation,
+            empty_elicitation_capability,
             stale_on_request,
-            knowledge_db: root
+            hang_on_request,
+            private_db: root
                 .path()
-                .join("data/art/knowledge-vault/art-control.sqlite3"),
+                .join("data/art/agents/codex-primary/art.sqlite3"),
         };
         let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
         let server_task = tokio::spawn(async move {
@@ -234,6 +284,51 @@ impl Harness {
             })
             .unwrap()
     }
+
+    async fn revise_proposal_source(&self, proposal_id: &str) {
+        let connection = rusqlite::Connection::open(
+            self.root
+                .path()
+                .join("data/art/knowledge-vault/art-control.sqlite3"),
+        )
+        .unwrap();
+        let sources: String = connection
+            .query_row(
+                "SELECT sources_json FROM knowledge_proposals WHERE id=?1",
+                [proposal_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let sources: Value = serde_json::from_str(&sources).unwrap();
+        let memory_id = sources[0]["source_id"].as_str().unwrap();
+        let revision = sources[0]["source_revision"].as_u64().unwrap();
+        let revised = self
+            .call(
+                "art_memory_capture",
+                json!({
+                    "memory_id":memory_id,
+                    "expected_revision":revision,
+                    "title":"Revised elicitation fixture",
+                    "summary":"The source changed after proposal creation.",
+                    "payload":{"kind":"semantic","data":{
+                        "statement":"The elicitation fixture has changed.",
+                        "applicability":"ART protocol tests",
+                        "confidence":"high",
+                        "evidence_summary":"A later deterministic source revision.",
+                        "revisit_when":null
+                    }},
+                    "scope_type":"repository",
+                    "scope_key":"agent-recall-trail",
+                    "sensitivity":"internal",
+                    "idempotency_key":"elicitation-memory-revision",
+                    "anchors":[{"kind":"test_receipt","locator":"test://elicitation-revised","source_version":"2","source_digest":null,"excerpt":"revised fixture","metadata":{}}],
+                    "unanchored_candidate":false,
+                    "no_persist_provenance":false
+                }),
+            )
+            .await;
+        assert_eq!(revised["revision"], revision + 1);
+    }
 }
 
 #[tokio::test]
@@ -340,6 +435,21 @@ async fn unsupported_client_gets_cli_fallback_without_an_elicitation_request() {
         .await;
 
     assert_eq!(result["outcome"], "operator_action_required");
+    assert_eq!(result["reason_code"], "ELICITATION_UNSUPPORTED");
+    assert!(harness.requests.lock().unwrap().is_empty());
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn empty_elicitation_capability_is_not_treated_as_form_support() {
+    let harness = Harness::start_empty_elicitation(vec![]).await;
+    let (proposal_id, revision) = harness.proposal().await;
+    let result = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
     assert_eq!(result["reason_code"], "ELICITATION_UNSUPPORTED");
     assert!(harness.requests.lock().unwrap().is_empty());
     harness.stop().await;
@@ -536,6 +646,34 @@ async fn cancellation_blank_reason_and_oversized_reason_all_fail_closed() {
 }
 
 #[tokio::test]
+async fn elicitation_timeout_is_bounded_and_a_later_request_can_retry() {
+    let harness = Harness::start_with_timeout(vec![
+        ElicitResult::new(ElicitationAction::Accept).with_content(
+            json!({"decision":"approve","reason":"Approved after the timed-out request."}),
+        ),
+    ])
+    .await;
+    let (proposal_id, revision) = harness.proposal().await;
+    let timed_out = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(timed_out["outcome"], "operator_action_required");
+    assert_eq!(timed_out["reason_code"], "ELICITATION_INTERRUPTED");
+    assert_eq!(timed_out["proposal_status"], "submitted");
+    let retried = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(retried["proposal_status"], "approved");
+    harness.stop().await;
+}
+
+#[tokio::test]
 async fn wrong_revision_and_publish_replay_fail_without_extra_editions() {
     let harness = Harness::start(
         true,
@@ -575,8 +713,176 @@ async fn wrong_revision_and_publish_replay_fail_without_extra_editions() {
             json!({"operation":"publish", "proposal_id":proposal_id, "revision":revision}),
         )
         .await;
-    assert_eq!(replay["code"], "ART_INVALID_STATE_TRANSITION");
+    assert_eq!(replay["outcome"], "operator_action_required");
+    assert_eq!(replay["reason_code"], "INVALID_GOVERNANCE_STATE");
+    let rereview = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(rereview["reason_code"], "INVALID_GOVERNANCE_STATE");
+    assert_eq!(harness.edition_count(), 1);
     assert_eq!(harness.requests.lock().unwrap().len(), 2);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_revised_private_source_blocks_review_before_elicitation() {
+    let harness = Harness::start(true, vec![]).await;
+    let (proposal_id, revision) = harness.proposal().await;
+    harness.revise_proposal_source(&proposal_id).await;
+    let result = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(result["outcome"], "operator_action_required");
+    assert_eq!(result["reason_code"], "SOURCE_STALE");
+    assert!(harness.requests.lock().unwrap().is_empty());
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn concurrent_review_requests_commit_only_one_human_decision() {
+    let harness = Harness::start(
+        true,
+        vec![
+            ElicitResult::new(ElicitationAction::Accept)
+                .with_content(json!({"decision":"approve","reason":"First concurrent review."})),
+            ElicitResult::new(ElicitationAction::Accept)
+                .with_content(json!({"decision":"reject","reason":"Second concurrent review."})),
+        ],
+    )
+    .await;
+    let (proposal_id, revision) = harness.proposal().await;
+    let args = json!({"operation":"review", "proposal_id":proposal_id, "revision":revision});
+    let (left, right) = tokio::join!(
+        harness.call("art_knowledge_governance", args.clone()),
+        harness.call("art_knowledge_governance", args),
+    );
+    let outcomes = [
+        left["outcome"].as_str().unwrap(),
+        right["outcome"].as_str().unwrap(),
+    ];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "reviewed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "operator_action_required")
+            .count(),
+        1
+    );
+    let connection = rusqlite::Connection::open(
+        harness
+            .root
+            .path()
+            .join("data/art/knowledge-vault/art-control.sqlite3"),
+    )
+    .unwrap();
+    let reviews: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM proposal_reviews WHERE proposal_id=?1",
+            [&proposal_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reviews, 1);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn malformed_publish_response_fails_closed_and_can_be_retried() {
+    let harness = Harness::start(
+        true,
+        vec![
+            ElicitResult::new(ElicitationAction::Accept).with_content(
+                json!({"decision":"approve","reason":"Approved for publish validation."}),
+            ),
+            ElicitResult::new(ElicitationAction::Accept).with_content(json!({"confirm":"yes"})),
+            ElicitResult::new(ElicitationAction::Accept).with_content(json!({"confirm":true})),
+        ],
+    )
+    .await;
+    let (proposal_id, revision) = harness.proposal().await;
+    let review = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(review["proposal_status"], "approved");
+    let malformed = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"publish", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(malformed["reason_code"], "ELICITATION_INVALID_RESPONSE");
+    assert_eq!(harness.edition_count(), 0);
+    let published = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"publish", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(published["outcome"], "published");
+    assert_eq!(harness.edition_count(), 1);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn concurrent_publish_confirmations_materialize_exactly_one_edition() {
+    let harness = Harness::start(
+        true,
+        vec![
+            ElicitResult::new(ElicitationAction::Accept).with_content(
+                json!({"decision":"approve","reason":"Approved before concurrent publication."}),
+            ),
+            ElicitResult::new(ElicitationAction::Accept).with_content(json!({"confirm":true})),
+            ElicitResult::new(ElicitationAction::Accept).with_content(json!({"confirm":true})),
+        ],
+    )
+    .await;
+    let (proposal_id, revision) = harness.proposal().await;
+    let review = harness
+        .call(
+            "art_knowledge_governance",
+            json!({"operation":"review", "proposal_id":proposal_id, "revision":revision}),
+        )
+        .await;
+    assert_eq!(review["proposal_status"], "approved");
+    let args = json!({"operation":"publish", "proposal_id":proposal_id, "revision":revision});
+    let (left, right) = tokio::join!(
+        harness.call("art_knowledge_governance", args.clone()),
+        harness.call("art_knowledge_governance", args),
+    );
+    let outcomes = [
+        left["outcome"].as_str().unwrap(),
+        right["outcome"].as_str().unwrap(),
+    ];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "published")
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "operator_action_required")
+            .count(),
+        1
+    );
+    assert_eq!(harness.edition_count(), 1);
     harness.stop().await;
 }
 
