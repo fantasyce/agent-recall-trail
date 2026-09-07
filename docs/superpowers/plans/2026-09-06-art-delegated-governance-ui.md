@@ -295,7 +295,7 @@ uncoordinated writer.
 
 - [ ] **Step 5: Implement embedded UI**
 
-Reproduce the approved local-ledger prototype as responsive static assets.
+Reproduce the approved local governance-record prototype as responsive static assets.
 Use semantic controls, keyboard focus, status text, reduced motion, and no
 external resources. The Settings toggle persists through the real API. Pending
 and Audit render real bounded data. Do not expose CLI copy.

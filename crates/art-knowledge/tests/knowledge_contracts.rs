@@ -154,14 +154,18 @@ fn delegated_publish_requires_enabled_bound_policy_and_exact_snapshot() {
 
 #[test]
 fn delegated_publish_materializes_every_risk_with_distinct_linked_receipts() {
-    for (index, risk) in [RiskLevel::Normal, RiskLevel::Elevated, RiskLevel::High]
-        .into_iter()
-        .enumerate()
+    for (index, (risk, key_byte)) in [
+        (RiskLevel::Normal, 52_u8),
+        (RiskLevel::Elevated, 53_u8),
+        (RiskLevel::High, 54_u8),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let root = tempdir().unwrap();
         let agent = AgentId::from_str("codex-primary").unwrap();
         let host_hash = "e".repeat(64);
-        let vault = KnowledgeVault::open(root.path(), [index as u8 + 52; 32]).unwrap();
+        let vault = KnowledgeVault::open(root.path(), [key_byte; 32]).unwrap();
         vault
             .set_delegation_mode(
                 &agent,

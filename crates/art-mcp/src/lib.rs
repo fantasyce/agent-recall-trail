@@ -482,7 +482,7 @@ impl ArtMcpServer {
 
     #[tool(
         name = "art_knowledge_governance",
-        description = "Request a human Knowledge Proposal review or publication confirmation through the MCP client. The Agent cannot supply the decision, reason, actor, or confirmation."
+        description = "Govern an exact Knowledge Proposal revision. Human review uses the local governance page or supported MCP elicitation; when persistent delegated_local mode is enabled, one explicit current user instruction may authorize the bound Agent to approve and publish in one operation."
     )]
     pub async fn art_knowledge_governance(
         &self,
@@ -776,7 +776,10 @@ impl ArtMcpServer {
                     input,
                     "operator_action_required",
                     Some("ELICITATION_UNSUPPORTED"),
-                    json!({"proposal_status": proposal.status}),
+                    json!({
+                        "proposal_status": proposal.status,
+                        "next_action": "open_governance_ui"
+                    }),
                 );
             }
             Err(ElicitationError::ParseError { .. }) => {
@@ -945,7 +948,10 @@ impl ArtMcpServer {
                     input,
                     "operator_action_required",
                     Some("ELICITATION_UNSUPPORTED"),
-                    json!({"proposal_status": proposal.status}),
+                    json!({
+                        "proposal_status": proposal.status,
+                        "next_action": "open_governance_ui"
+                    }),
                 );
             }
             Err(ElicitationError::ParseError { .. }) => {

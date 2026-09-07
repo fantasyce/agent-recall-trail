@@ -510,7 +510,7 @@ async fn review_request_changes_and_reject_are_human_form_decisions() {
 }
 
 #[tokio::test]
-async fn unsupported_client_gets_cli_fallback_without_an_elicitation_request() {
+async fn unsupported_client_is_routed_to_the_governance_page_without_elicitation() {
     let harness = Harness::start(false, vec![]).await;
     let (proposal_id, revision) = harness.proposal().await;
 
@@ -525,6 +525,8 @@ async fn unsupported_client_gets_cli_fallback_without_an_elicitation_request() {
 
     assert_eq!(result["outcome"], "operator_action_required");
     assert_eq!(result["reason_code"], "ELICITATION_UNSUPPORTED");
+    assert_eq!(result["next_action"], "open_governance_ui");
+    assert!(result.get("fallback_cli").is_none());
     assert!(harness.requests.lock().unwrap().is_empty());
     harness.stop().await;
 }
@@ -540,6 +542,8 @@ async fn empty_elicitation_capability_is_not_treated_as_form_support() {
         )
         .await;
     assert_eq!(result["reason_code"], "ELICITATION_UNSUPPORTED");
+    assert_eq!(result["next_action"], "open_governance_ui");
+    assert!(result.get("fallback_cli").is_none());
     assert!(harness.requests.lock().unwrap().is_empty());
     harness.stop().await;
 }

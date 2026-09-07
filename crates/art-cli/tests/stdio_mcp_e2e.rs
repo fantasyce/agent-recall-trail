@@ -81,7 +81,7 @@ fn stdio_initialize_list_tools_and_eof_exit_cleanly() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     let tools = &responses.iter().find(|value| value["id"] == 2).unwrap()["result"]["tools"];
-    assert_eq!(tools.as_array().unwrap().len(), 7);
+    assert_eq!(tools.as_array().unwrap().len(), 8);
     assert!(responses.iter().all(|value| value.get("jsonrpc").is_some()));
 }
 
