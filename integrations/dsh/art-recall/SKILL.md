@@ -29,7 +29,17 @@ Use only `mcp__art__art_*` for ART memory and knowledge operations.
 - Capture only reusable, non-obvious, sourced experience with the documented typed payload, narrow scope, sensitivity, and idempotency key.
 - Do not store secrets, credentials, raw transcripts, or unapproved third-party content.
 - Propose shared knowledge only when stable, sanitized, and locked to exact source revisions.
-- Never approve, publish, revoke, or supersede a Knowledge Edition; those operations require a local human.
+- Read `art_health.governance_mode` first. The default-off `human_review` mode
+  uses `art_governance_ui_open`; open the returned local page in DSH's page or
+  browser surface for settings, review, publication, status, and audit.
+- In `delegated_local`, one unambiguous current user request to promote the
+  cited memory authorizes one `art_knowledge_governance` call with
+  `operation=approve_and_publish`. Supply only Proposal ID and revision. ART
+  derives authority fields and records `AgentDelegated`; host Full Access is
+  not sufficient by itself.
+- Ask when intent is ambiguous. Never direct the person to a terminal, split
+  delegated approval and publication, or label Agent action as Human.
+- Never revoke or supersede a Knowledge Edition; those operations require a local human.
 - Use feedback for relevant, stale, conflict, or unsafe signals without rewriting stored content.
 
 ## Failure behavior

@@ -8,7 +8,15 @@ ART protects private Agent experience, source locations and excerpts, knowledge 
 
 - Physical per-Agent SQLite files and startup identity binding prevent cross-Agent access through ART interfaces.
 - Private files use owner-only permissions; directories use owner-only traversal.
-- MCP exposes no SQL, owner selector, approval, publication, deletion, grant, or cross-Agent tool.
+- MCP exposes no SQL, owner selector, deletion, grant, or cross-Agent tool.
+- The governance page binds only to a random `127.0.0.1` port. Short-lived
+  high-entropy session capabilities, exact Origin checks, CSRF tokens, Agent
+  binding, host binding, proposal revision binding, and bounded redacted JSON
+  protect every page mutation.
+- Delegation is default-off and persists only for one host binding plus Agent
+  identity. It is not inferred from Full Access. Delegated approval and
+  publication are recorded as `AgentDelegated`, never Human, with the fixed
+  `current_user_instruction` authorization basis.
 - Structured anchors reject common credential forms, private keys, authorization headers, raw transcripts, unsafe receipt shapes, oversized source versions/digests, and forged export hashes.
 - Publication shares keyed commitments and hashes instead of private source identifiers.
 - Paths are canonicalized and constrained; import/export rejects symbolic links, hard links, unsafe content, and existing targets.
@@ -20,6 +28,15 @@ ART protects private Agent experience, source locations and excerpts, knowledge 
 ## Prompt injection
 
 Memory and knowledge are data, not instructions. Hosts must not elevate permissions because stored text requests it. Knowledge review must treat embedded tool directions, policy overrides, and credential requests as suspicious. ART does not bypass the host's normal approval and sandbox policy.
+
+## Delegated trust boundary
+
+Delegated mode deliberately weakens the human-review boundary: ART trusts that
+the bound Agent correctly recognized an unambiguous current user instruction.
+It does not authenticate the speaker or retain the raw prompt. The benefit is
+one-instruction governance; the compensating controls are explicit persistent
+opt-in, identity scoping, atomic publication, exact source/snapshot checks,
+distinct audit labels, and immediate disable from the local page.
 
 ## Limits
 

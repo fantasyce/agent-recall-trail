@@ -6,9 +6,9 @@ cd "$repo_root"
 art_bin="${ART_BIN:-target/debug/art}"
 
 cargo metadata --format-version 1 --no-deps \
-  | jq -e 'all(.packages[]; .version == "0.3.1")' >/dev/null
-test "$($art_bin --version)" = 'art 0.3.1'
-jq -e '.name == "agent-recall-trail" and .version == "0.3.1"' \
+  | jq -e 'all(.packages[]; .version == "0.3.3")' >/dev/null
+test "$($art_bin --version)" = 'art 0.3.3'
+jq -e '.name == "agent-recall-trail" and .version == "0.3.3"' \
   plugin/agent-recall-trail/.codex-plugin/plugin.json >/dev/null
 rg -q 'four explicit retrieval modes' README.md
 rg -q 'lexical.*full_scan.*semantic.*hybrid' README.md
@@ -18,5 +18,8 @@ rg -q 'art backup verify --source' docs/operations.md
 rg -q 'art backup restore --source' docs/operations.md
 rg -q 'never pushes automatically' docs/operations.md
 rg -q 'encrypted recovery capsule' docs/security-model.md
+rg -q 'art_governance_ui_open' README.md docs/operations.md docs/architecture.md
+rg -q 'AgentDelegated' README.md docs/security-model.md docs/architecture.md
+rg -q 'default-off' README.md docs/operations.md
 
 echo 'release version contract passed'

@@ -1,15 +1,15 @@
-use std::{process::Command, str::FromStr};
+use std::{process::Command, str::FromStr, sync::Arc};
 
 use art_domain::{
     ArtError,
     agent::AgentId,
     knowledge::{
-        KnowledgeDraft, ProposalSourceLock, ProposalSourceType, ProposalStatus, ReviewActor,
-        RiskLevel,
+        DelegatedAuthorizationBasis, KnowledgeDraft, ProposalSourceLock, ProposalSourceType,
+        ProposalStatus, ReviewActor, RiskLevel,
     },
     memory::Sensitivity,
 };
-use art_knowledge::KnowledgeVault;
+use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
@@ -24,6 +24,253 @@ fn source(agent: &AgentId) -> ProposalSourceLock {
         approved_excerpt_hash: Some("c".repeat(64)),
         use_grant_id: None,
     }
+}
+
+#[test]
+fn delegation_policy_defaults_off_persists_and_stays_identity_scoped() {
+    let root = tempdir().unwrap();
+    let codex = AgentId::from_str("codex-primary").unwrap();
+    let dsh = AgentId::from_str("dsh-primary").unwrap();
+    let codex_host = "a".repeat(64);
+    let other_host = "b".repeat(64);
+    let vault = KnowledgeVault::open(root.path(), [43_u8; 32]).unwrap();
+
+    assert_eq!(
+        vault.delegation_mode(&codex, &codex_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+    vault
+        .set_delegation_mode(
+            &codex,
+            &codex_host,
+            DelegationMode::DelegatedLocal,
+            "local_governance_ui",
+        )
+        .unwrap();
+    assert_eq!(
+        vault.delegation_mode(&dsh, &codex_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+    assert_eq!(
+        vault.delegation_mode(&codex, &other_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+    drop(vault);
+
+    let reopened = KnowledgeVault::open(root.path(), [43_u8; 32]).unwrap();
+    assert_eq!(
+        reopened.delegation_mode(&codex, &codex_host).unwrap(),
+        DelegationMode::DelegatedLocal
+    );
+    reopened
+        .set_delegation_mode(
+            &codex,
+            &codex_host,
+            DelegationMode::HumanReview,
+            "local_governance_ui",
+        )
+        .unwrap();
+    assert_eq!(
+        reopened.delegation_mode(&codex, &codex_host).unwrap(),
+        DelegationMode::HumanReview
+    );
+
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    let event_count: u64 = connection
+        .query_row("SELECT COUNT(*) FROM delegation_policy_events", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(event_count, 2);
+    assert!(
+        reopened
+            .delegation_mode(&codex, "not-a-binding-hash")
+            .is_err()
+    );
+}
+
+fn delegated_actor(agent: &AgentId, host_hash: &str) -> ReviewActor {
+    ReviewActor::agent_delegated(
+        agent.clone(),
+        host_hash.to_owned(),
+        DelegatedAuthorizationBasis::CurrentUserInstruction,
+    )
+    .unwrap()
+}
+
+#[test]
+fn delegated_publish_requires_enabled_bound_policy_and_exact_snapshot() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let host_hash = "d".repeat(64);
+    let vault = KnowledgeVault::open(root.path(), [51_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("delegated.disabled", "Delegated", "bounded body"),
+            vec![source(&agent)],
+            "delegated-disabled",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+
+    assert!(matches!(
+        vault.approve_and_publish_delegated_exact(
+            &snapshot,
+            delegated_actor(&agent, &host_hash),
+            &host_hash,
+        ),
+        Err(ArtError::PermissionDenied(_))
+    ));
+    assert_eq!(
+        vault.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Submitted
+    );
+    assert!(vault.delegated_receipts(&proposal.id).unwrap().is_empty());
+
+    vault
+        .set_delegation_mode(
+            &agent,
+            &host_hash,
+            DelegationMode::DelegatedLocal,
+            "local_governance_ui",
+        )
+        .unwrap();
+    let mut stale = snapshot.clone();
+    stale.draft_hash = "0".repeat(64);
+    assert!(matches!(
+        vault.approve_and_publish_delegated_exact(
+            &stale,
+            delegated_actor(&agent, &host_hash),
+            &host_hash,
+        ),
+        Err(ArtError::SourceStale)
+    ));
+    assert_eq!(
+        vault.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Submitted
+    );
+}
+
+#[test]
+fn delegated_publish_materializes_every_risk_with_distinct_linked_receipts() {
+    for (index, (risk, key_byte)) in [
+        (RiskLevel::Normal, 52_u8),
+        (RiskLevel::Elevated, 53_u8),
+        (RiskLevel::High, 54_u8),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let root = tempdir().unwrap();
+        let agent = AgentId::from_str("codex-primary").unwrap();
+        let host_hash = "e".repeat(64);
+        let vault = KnowledgeVault::open(root.path(), [key_byte; 32]).unwrap();
+        vault
+            .set_delegation_mode(
+                &agent,
+                &host_hash,
+                DelegationMode::DelegatedLocal,
+                "local_governance_ui",
+            )
+            .unwrap();
+        let mut draft = KnowledgeDraft::minimal(
+            format!("delegated.risk-{index}"),
+            format!("Risk {index}"),
+            "bounded body",
+        );
+        draft.risk = risk;
+        let proposal = vault
+            .propose(
+                &agent,
+                draft,
+                vec![source(&agent)],
+                &format!("delegated-risk-{index}"),
+            )
+            .unwrap();
+        let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+
+        let edition = vault
+            .approve_and_publish_delegated_exact(
+                &snapshot,
+                delegated_actor(&agent, &host_hash),
+                &host_hash,
+            )
+            .unwrap();
+
+        assert_eq!(
+            vault.proposal(&proposal.id).unwrap().status,
+            ProposalStatus::Materialized
+        );
+        assert_eq!(
+            vault
+                .current(&proposal.draft.knowledge_key)
+                .unwrap()
+                .edition_id,
+            edition.edition_id
+        );
+        let receipts = vault.delegated_receipts(&proposal.id).unwrap();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[0].actor_type, "agent_delegated");
+        assert_eq!(receipts[0].host_binding_hash, host_hash);
+        assert_eq!(
+            receipts[0].edition_id.as_deref(),
+            Some(edition.edition_id.as_str())
+        );
+        assert_eq!(
+            receipts
+                .iter()
+                .map(|receipt| receipt.operation.as_str())
+                .collect::<Vec<_>>(),
+            vec!["approve", "publish"]
+        );
+    }
+}
+
+#[test]
+fn concurrent_delegated_publish_has_one_winner_and_no_approved_state() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let host_hash = "f".repeat(64);
+    let vault = Arc::new(KnowledgeVault::open(root.path(), [55_u8; 32]).unwrap());
+    vault
+        .set_delegation_mode(
+            &agent,
+            &host_hash,
+            DelegationMode::DelegatedLocal,
+            "local_governance_ui",
+        )
+        .unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("delegated.concurrent", "Concurrent", "one winner"),
+            vec![source(&agent)],
+            "delegated-concurrent",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let vault = Arc::clone(&vault);
+            let snapshot = snapshot.clone();
+            let actor = delegated_actor(&agent, &host_hash);
+            let host_hash = host_hash.clone();
+            std::thread::spawn(move || {
+                vault.approve_and_publish_delegated_exact(&snapshot, actor, &host_hash)
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        vault.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Materialized
+    );
+    assert_eq!(vault.delegated_receipts(&proposal.id).unwrap().len(), 2);
 }
 
 fn published_fixture(
@@ -257,6 +504,242 @@ fn stale_source_invalidates_review_and_blocks_publish() {
         vault.publish(&proposal.id, 1, true),
         Err(ArtError::SourceStale)
     ));
+}
+
+#[test]
+fn a_materialized_proposal_is_terminal_and_cannot_be_reviewed_again() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [41_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("terminal.proposal", "Terminal", "one edition only"),
+            vec![source(&agent)],
+            "terminal-proposal",
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "approved once",
+        )
+        .unwrap();
+    vault
+        .publish(&proposal.id, proposal.revision, true)
+        .unwrap();
+    assert!(matches!(
+        vault.review(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "approved",
+            "attempted replay",
+        ),
+        Err(ArtError::InvalidStateTransition)
+    ));
+    assert!(matches!(
+        vault.publish(&proposal.id, proposal.revision, true),
+        Err(ArtError::InvalidStateTransition)
+    ));
+}
+
+#[test]
+fn concurrent_exact_reviews_use_atomic_snapshot_compare_and_swap() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = Arc::new(KnowledgeVault::open(root.path(), [42_u8; 32]).unwrap());
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("atomic.review", "Atomic review", "review once"),
+            vec![source(&agent)],
+            "atomic-review",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+    let handles: Vec<_> = ["reviewer-a", "reviewer-b"]
+        .into_iter()
+        .map(|actor| {
+            let vault = Arc::clone(&vault);
+            let snapshot = snapshot.clone();
+            std::thread::spawn(move || {
+                vault.review_exact(
+                    &snapshot,
+                    ReviewActor::Human(actor.into()),
+                    "approved",
+                    "concurrent exact review",
+                )
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(ArtError::SourceStale)))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn concurrent_same_key_publications_must_reconfirm_the_atomically_reserved_number() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = Arc::new(KnowledgeVault::open(root.path(), [43_u8; 32]).unwrap());
+    let proposals: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|suffix| {
+            let proposal = vault
+                .propose(
+                    &agent,
+                    KnowledgeDraft::minimal("atomic.publish", format!("Edition {suffix}"), suffix),
+                    vec![source(&agent)],
+                    &format!("atomic-publish-{suffix}"),
+                )
+                .unwrap();
+            vault
+                .approve(
+                    &proposal.id,
+                    proposal.revision,
+                    ReviewActor::Human("local-user".into()),
+                    "approved",
+                )
+                .unwrap();
+            GovernanceSnapshot::from_proposal(&vault.proposal(&proposal.id).unwrap())
+        })
+        .collect();
+    assert_eq!(vault.next_edition_number("atomic.publish").unwrap(), 1);
+    let handles: Vec<_> = proposals
+        .iter()
+        .cloned()
+        .map(|snapshot| {
+            let vault = Arc::clone(&vault);
+            std::thread::spawn(move || vault.publish_exact(&snapshot, 1, true))
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(ArtError::SourceStale)))
+            .count(),
+        1
+    );
+    assert_eq!(vault.next_edition_number("atomic.publish").unwrap(), 2);
+    let remaining = proposals
+        .iter()
+        .find(|snapshot| {
+            vault.proposal(&snapshot.proposal_id).unwrap().status == ProposalStatus::Approved
+        })
+        .unwrap();
+    let second = vault.publish_exact(remaining, 2, true).unwrap();
+    assert_eq!(second.edition_number, 2);
+    assert_eq!(vault.current("atomic.publish").unwrap().edition_number, 2);
+}
+
+#[test]
+fn partial_publish_recovery_releases_the_reserved_number_for_a_fresh_confirmation() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [44_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("recover.reserve", "Recover", "retry safely"),
+            vec![source(&agent)],
+            "recover-reserve",
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "approved",
+        )
+        .unwrap();
+    let edition_id = "arke_interrupted";
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    connection.execute(
+        "INSERT INTO publication_reservations(proposal_id,proposal_revision,knowledge_key,edition_number,edition_id,created_at) VALUES (?1,1,'recover.reserve',1,?2,'now')",
+        rusqlite::params![proposal.id, edition_id],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO publish_intents(id,proposal_id,proposal_revision,edition_id,target_dir,state,created_at,updated_at) VALUES ('arti_interrupted',?1,1,?2,?3,'prepared','now','now')",
+        rusqlite::params![proposal.id, edition_id, root.path().join("editions/recover.reserve").to_string_lossy()],
+    ).unwrap();
+    drop(connection);
+    drop(vault);
+
+    let reopened = KnowledgeVault::open(root.path(), [44_u8; 32]).unwrap();
+    assert_eq!(reopened.next_edition_number("recover.reserve").unwrap(), 1);
+    let snapshot = GovernanceSnapshot::from_proposal(&reopened.proposal(&proposal.id).unwrap());
+    let edition = reopened.publish_exact(&snapshot, 1, true).unwrap();
+    assert_eq!(edition.edition_number, 1);
+}
+
+#[test]
+fn targeted_failure_cleanup_never_touches_another_active_publication() {
+    let root = tempdir().unwrap();
+    let vault = KnowledgeVault::open(root.path(), [45_u8; 32]).unwrap();
+    let target_a = root.path().join("editions/target-a");
+    let target_b = root.path().join("editions/target-b");
+    std::fs::create_dir_all(&target_a).unwrap();
+    std::fs::create_dir_all(&target_b).unwrap();
+    let file_a = target_a.join("1-arke_a.json");
+    let file_b = target_b.join("1-arke_b.json");
+    std::fs::write(&file_a, "partial a").unwrap();
+    std::fs::write(&file_b, "active b").unwrap();
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    for (proposal, key, edition, intent, target) in [
+        ("artp_a", "target-a", "arke_a", "arti_a", &target_a),
+        ("artp_b", "target-b", "arke_b", "arti_b", &target_b),
+    ] {
+        connection.execute(
+            "INSERT INTO publication_reservations(proposal_id,proposal_revision,knowledge_key,edition_number,edition_id,created_at) VALUES (?1,1,?2,1,?3,'now')",
+            rusqlite::params![proposal, key, edition],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO publish_intents(id,proposal_id,proposal_revision,edition_id,target_dir,state,created_at,updated_at) VALUES (?1,?2,1,?3,?4,'prepared','now','now')",
+            rusqlite::params![intent, proposal, edition, target.to_string_lossy()],
+        ).unwrap();
+    }
+    drop(connection);
+
+    vault
+        .test_only_quarantine_publish_intent("arti_a", "arke_a", &target_a)
+        .unwrap();
+    assert!(!file_a.exists());
+    assert!(file_b.exists());
+    let connection = Connection::open(root.path().join("art-control.sqlite3")).unwrap();
+    let state_b: String = connection
+        .query_row(
+            "SELECT state FROM publish_intents WHERE id='arti_b'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let reservation_b: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM publication_reservations WHERE edition_id='arke_b')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state_b, "prepared");
+    assert!(reservation_b);
 }
 
 #[test]
@@ -629,6 +1112,12 @@ fn opening_the_vault_completes_a_hash_valid_materialized_publish_intent() {
             [&edition.edition_id],
         )
         .unwrap();
+    control
+        .execute(
+            "UPDATE knowledge_proposals SET status='approved' WHERE id=?1",
+            [&proposal.id],
+        )
+        .unwrap();
     drop(control);
 
     let recovered = KnowledgeVault::open(root.path(), [6_u8; 32]).unwrap();
@@ -637,6 +1126,10 @@ fn opening_the_vault_completes_a_hash_valid_materialized_publish_intent() {
         edition.edition_id
     );
     assert_eq!(recovered.pending_recoveries().unwrap(), 0);
+    assert_eq!(
+        recovered.proposal(&proposal.id).unwrap().status,
+        ProposalStatus::Materialized
+    );
 }
 
 #[test]

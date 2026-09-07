@@ -1,7 +1,7 @@
 {
   "name": "agent-recall-trail",
-  "version": "0.3.1",
-  "description": "Private Agent memory and human-reviewed shared knowledge for Codex",
+  "version": "0.3.3",
+  "description": "Private Agent memory and governed shared knowledge for Codex",
   "author": {
     "name": "Agent Recall Trail contributors",
     "url": "https://github.com/fantasyce"
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Agent Recall Trail",
     "shortDescription": "Private Agent memory plus reviewed shared knowledge.",
-    "longDescription": "Recall one Codex Agent's private experience and human-reviewed Knowledge Editions through a local stdio MCP server. Private memory stays in a physically separate Agent Vault and is never shared automatically.",
+    "longDescription": "Recall one Codex Agent's private experience and governed Knowledge Editions through a local stdio MCP server. Human governance uses ART's local page; optional delegated governance stays default-off and distinctly audited.",
     "developerName": "Agent Recall Trail contributors",
     "category": "Developer Tools",
     "capabilities": ["Local", "Read", "Write"],

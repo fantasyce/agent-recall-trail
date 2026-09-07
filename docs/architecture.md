@@ -8,14 +8,27 @@ ART separates private experience from shared knowledge instead of treating them 
 2. `art-agent-store` owns one SQLite file per Agent. The database stores revisions, versioned/digested anchors, assurance decisions, relations, idempotent feedback, source changes, and lifecycle events.
 3. `art-knowledge` owns a private control store and a shareable Edition tree. Proposals and source locks remain private; Edition Markdown and manifests contain commitments only.
 4. `art-retrieval` implements one progressive recall pipeline over private and shared lanes. It uses rebuildable navigation, lexical, and optional semantic projections while canonical Agent artifacts and immutable shared files/events remain authoritative.
-5. `art-mcp` binds one Agent identity at process start and exposes exactly six Agent-safe tools over stdio.
-6. `art-cli` exposes human operations, diagnostics, integration previews, import/export, and reindex entry points.
+5. `art-mcp` binds one Agent identity at process start and exposes exactly
+   eight Agent-safe tools over stdio. It owns the page-session manager and a
+   random loopback listener started on demand by `art_governance_ui_open`.
+6. `art-cli` exposes diagnostics, integration previews, import/export, and
+   reindex entry points; normal Codex/DSH human governance is page-first.
 
 ## Trust flow
 
 Capture begins as Candidate. A deterministic sourced capture may become Active, but Active means eligible for recall—not proven truth. An exact `memory_id` plus `expected_revision` creates a new immutable revision transactionally. Assurance decisions bind an exact memory revision and anchor-set hash. Source digest/revocation events make affected memory disputed and stale for proposals. Dispute, supersede, and archive preserve the old artifact and append an event.
 
-An Agent proposal locks exact source revisions and hashes. A local human reviews the proposal. Publication requires a matching current approval and writes a new immutable Edition plus a redacted manifest. A recoverable intent spans the SQLite/filesystem boundary: partial files are quarantined, complete hash-valid files are projected, and only committed projections are recallable. Immutable revocation/replacement events are reconciled on startup.
+An Agent proposal locks exact source revisions and hashes. In the default
+`human_review` mode, the ART local page collects human review and separate
+publication confirmation. Compatible clients may retain form Elicitation.
+When the page has explicitly enabled `delegated_local` for the bound host and
+Agent, one `approve_and_publish` call rechecks policy inside the mutation
+boundary, moves directly from Submitted to Materialized, and appends linked
+`AgentDelegated` receipts. The Agent-facing input still contains no decision,
+reason, actor, risk override, hash, or confirmation field. A recoverable intent
+spans the SQLite/filesystem boundary: partial files are quarantined, complete
+hash-valid files are projected, and only committed projections are recallable.
+Immutable revocation/replacement events are reconciled on startup.
 
 ## Physical layout
 
@@ -51,4 +64,12 @@ The user selects `lexical`, `full_scan`, `semantic`, or `hybrid` per request. Fu
 
 ## Deferred by design
 
-ART v0.3.0 has no network listener, background daemon, bundled embedding model, cloud replication, hostile same-user sandbox, automatic physical deletion, or automatic knowledge approval. An optional embedding client makes outbound HTTPS requests only when the operator creates a valid endpoint configuration and explicitly selects a semantic mode or rebuilds vectors. There is no AAA runtime adapter in this release. Shared Markdown, Edition manifests, lifecycle events, and their private Git history are authoritative; navigation, search, current-state, and semantic projections are portable and rebuildable.
+ART has no remote listener, background daemon, bundled embedding model, cloud
+replication, hostile same-user sandbox, or automatic physical deletion. Its
+only inbound HTTP surface is an on-demand random loopback governance page with
+expiring capabilities. An optional embedding client makes outbound HTTPS
+requests only when the operator creates a valid endpoint configuration and
+explicitly selects a semantic mode or rebuilds vectors. There is no AAA runtime
+adapter in this release. Shared Markdown, Edition manifests, lifecycle events,
+and their private Git history are authoritative; navigation, search,
+current-state, and semantic projections are portable and rebuildable.

@@ -1,5 +1,7 @@
 //! Agent-bound stdio MCP server.
 
+pub mod governance_ui;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -7,6 +9,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use art_agent_store::AgentVault;
@@ -14,10 +17,15 @@ use art_domain::{
     ArtError, ArtResult,
     agent::{AgentId, ArtPaths},
     anchor::{AnchorKind, SourceAnchor},
-    knowledge::{KnowledgeDraft, ProposalSourceLock, ProposalSourceType},
-    memory::{MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity},
+    knowledge::{
+        DelegatedAuthorizationBasis, KnowledgeDraft, KnowledgeProposal, ProposalSourceLock,
+        ProposalSourceType, ProposalStatus, ReviewActor, RiskLevel,
+    },
+    memory::{
+        MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity, canonical_json_hash,
+    },
 };
-use art_knowledge::KnowledgeVault;
+use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use art_retrieval::{
     EmbeddingEndpoint, OpenAiCompatibleEmbeddingProvider, RankFusionPolicy, RecallDetail,
     RecallEngine, RecallRequest, RetrievalMode, SemanticRuntime, knowledge_semantic_path,
@@ -25,13 +33,17 @@ use art_retrieval::{
 };
 use chrono::Utc;
 use rmcp::{
-    Json, ServerHandler, ServiceExt,
+    Json, Peer, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema},
+    service::ElicitationError,
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::governance_ui::{GovernanceUiManager, UiView};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RecallInput {
@@ -105,6 +117,35 @@ pub struct KnowledgeProposeInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeGovernanceOperation {
+    Review,
+    Publish,
+    ApproveAndPublish,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeGovernanceInput {
+    pub operation: KnowledgeGovernanceOperation,
+    pub proposal_id: String,
+    pub revision: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewElicitationResponse {
+    decision: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublishElicitationResponse {
+    confirm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FeedbackInput {
     pub subject_ref: String,
     pub signal: String,
@@ -114,6 +155,14 @@ pub struct FeedbackInput {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct HealthInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GovernanceUiOpenInput {
+    pub view: UiView,
+    pub proposal_id: Option<String>,
+    pub revision: Option<u32>,
+}
 
 /// Stable object-shaped MCP result accepted by strict MCP clients.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -139,10 +188,13 @@ impl ToolOutput {
 pub struct ArtMcpServer {
     tool_router: ToolRouter<Self>,
     agent_id: AgentId,
+    host_binding: String,
     private_vault: AgentVault,
     knowledge_vault: KnowledgeVault,
+    governance_ui: GovernanceUiManager,
     recall_engine: RecallEngine,
     shutting_down: Arc<AtomicBool>,
+    elicitation_timeout: Duration,
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -155,13 +207,29 @@ impl ArtMcpServer {
         let private_vault = AgentVault::open(paths.agent_vault(&agent_id), agent_id.clone())?;
         let knowledge_vault = KnowledgeVault::open(paths.knowledge_vault(), commitment_key)?;
         let recall_engine = configured_recall_engine(paths, &private_vault, &knowledge_vault);
+        let profile_digest = fs::read(paths.agent_profile(&agent_id)).map_or_else(
+            |_| "profile-unavailable".into(),
+            |bytes| canonical_json_hash(&json!({"profile_bytes":bytes})),
+        );
+        let host_binding = canonical_json_hash(&json!({
+            "art_root": paths.root().to_string_lossy(),
+            "agent_profile": profile_digest,
+        }));
+        let governance_ui = GovernanceUiManager::new(
+            knowledge_vault.clone(),
+            agent_id.clone(),
+            host_binding.clone(),
+        );
         Ok(Self {
             tool_router: Self::tool_router(),
             agent_id,
+            host_binding,
             private_vault,
             knowledge_vault,
+            governance_ui,
             recall_engine,
             shutting_down: Arc::new(AtomicBool::new(false)),
+            elicitation_timeout: Duration::from_secs(300),
         })
     }
 
@@ -191,6 +259,25 @@ impl ArtMcpServer {
     #[doc(hidden)]
     pub fn test_only_begin_shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
+    }
+
+    #[doc(hidden)]
+    pub fn test_only_set_elicitation_timeout(&mut self, timeout: Duration) {
+        self.elicitation_timeout = timeout;
+    }
+
+    #[doc(hidden)]
+    pub fn test_only_set_delegation_mode(&mut self, enabled: bool) -> ArtResult<()> {
+        self.knowledge_vault.set_delegation_mode(
+            &self.agent_id,
+            &self.host_binding,
+            if enabled {
+                DelegationMode::DelegatedLocal
+            } else {
+                DelegationMode::HumanReview
+            },
+            "local_governance_ui",
+        )
     }
 
     #[tool(
@@ -394,6 +481,86 @@ impl ArtMcpServer {
     }
 
     #[tool(
+        name = "art_knowledge_governance",
+        description = "Govern an exact Knowledge Proposal revision. Human review uses the local governance page or supported MCP elicitation; when persistent delegated_local mode is enabled, one explicit current user instruction may authorize the bound Agent to approve and publish in one operation."
+    )]
+    pub async fn art_knowledge_governance(
+        &self,
+        Parameters(input): Parameters<KnowledgeGovernanceInput>,
+        peer: Peer<RoleServer>,
+    ) -> Result<Json<ToolOutput>, String> {
+        self.ensure_running().map_err(tool_error)?;
+        let proposal = self
+            .knowledge_vault
+            .proposal(&input.proposal_id)
+            .map_err(tool_error)?;
+        if proposal.revision != input.revision || proposal.status == ProposalStatus::Stale {
+            return governance_output(
+                &input,
+                "operator_action_required",
+                Some("SOURCE_STALE"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        if let Some(reason_code) = self.source_revalidation_reason(&proposal) {
+            return governance_output(
+                &input,
+                "operator_action_required",
+                Some(reason_code),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+        match input.operation {
+            KnowledgeGovernanceOperation::Review => {
+                self.review_by_elicitation(&input, &proposal, &snapshot, &peer)
+                    .await
+            }
+            KnowledgeGovernanceOperation::Publish => {
+                self.publish_by_elicitation(&input, &proposal, &snapshot, &peer)
+                    .await
+            }
+            KnowledgeGovernanceOperation::ApproveAndPublish => {
+                if self
+                    .knowledge_vault
+                    .delegation_mode(&self.agent_id, &self.host_binding)
+                    .map_err(tool_error)?
+                    != DelegationMode::DelegatedLocal
+                {
+                    return governance_output(
+                        &input,
+                        "operator_action_required",
+                        Some("DELEGATION_DISABLED"),
+                        json!({"proposal_status": proposal.status}),
+                    );
+                }
+                let actor = ReviewActor::agent_delegated(
+                    self.agent_id.clone(),
+                    self.host_binding.clone(),
+                    DelegatedAuthorizationBasis::CurrentUserInstruction,
+                )
+                .map_err(tool_error)?;
+                let edition = self
+                    .knowledge_vault
+                    .approve_and_publish_delegated_exact(&snapshot, actor, &self.host_binding)
+                    .map_err(tool_error)?;
+                governance_output(
+                    &input,
+                    "published",
+                    None,
+                    json!({
+                        "proposal_status": ProposalStatus::Materialized,
+                        "edition_id": edition.edition_id,
+                        "edition_number": edition.edition_number,
+                        "knowledge_key": edition.knowledge_key,
+                        "actor_type": "agent_delegated",
+                    }),
+                )
+            }
+        }
+    }
+
+    #[tool(
         name = "art_feedback",
         description = "Append a relevant, stale, conflict, or unsafe signal. Feedback never changes memory, assurance, proposal, or edition state."
     )]
@@ -423,6 +590,45 @@ impl ArtMcpServer {
         Ok(Json(ToolOutput::from_value(
             json!({"schema":"art.mcp.v1","feedback_id":id,"accepted":true}),
         )?))
+    }
+
+    #[tool(
+        name = "art_governance_ui_open",
+        description = "Open a short-lived ART local governance page for pending proposals, settings, or audit. The returned loopback URL is bound to this Agent and host."
+    )]
+    pub async fn art_governance_ui_open(
+        &self,
+        Parameters(input): Parameters<GovernanceUiOpenInput>,
+    ) -> Result<Json<ToolOutput>, String> {
+        self.ensure_running().map_err(tool_error)?;
+        let proposal = match (input.proposal_id, input.revision) {
+            (Some(id), Some(revision)) => {
+                let current = self.knowledge_vault.proposal(&id).map_err(tool_error)?;
+                if current.revision != revision {
+                    return Err(tool_error(ArtError::SourceStale));
+                }
+                Some((id, revision))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(tool_error(ArtError::InvalidInput(
+                    "proposal_id and revision must be supplied together".into(),
+                )));
+            }
+        };
+        let session = self
+            .governance_ui
+            .open_session(input.view, proposal)
+            .await
+            .map_err(tool_error)?;
+        Ok(Json(ToolOutput::from_value(json!({
+            "schema":"art.governance.ui.session.v1",
+            "url":session.url,
+            "expires_at":session.expires_at,
+            "view":session.view,
+            "proposal_id":session.proposal_id,
+            "revision":session.revision,
+        }))?))
     }
 
     #[tool(
@@ -469,10 +675,468 @@ impl ArtMcpServer {
             "degraded"
         };
         let vector_status = self.recall_engine.vector_status();
+        let governance_mode = self
+            .knowledge_vault
+            .delegation_mode(&self.agent_id, &self.host_binding)
+            .map_err(tool_error)?;
         Ok(Json(ToolOutput::from_value(
-            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status}),
+            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status,"governance_mode":governance_mode}),
         )?))
     }
+}
+
+impl ArtMcpServer {
+    async fn review_by_elicitation(
+        &self,
+        input: &KnowledgeGovernanceInput,
+        proposal: &KnowledgeProposal,
+        snapshot: &GovernanceSnapshot,
+        peer: &Peer<RoleServer>,
+    ) -> Result<Json<ToolOutput>, String> {
+        if matches!(proposal.draft.risk, RiskLevel::Elevated | RiskLevel::High)
+            && proposal.status == ProposalStatus::UnderReview
+        {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("INDEPENDENT_REVIEW_REQUIRED"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        if proposal.status != ProposalStatus::Submitted {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("INVALID_GOVERNANCE_STATE"),
+                json!({"proposal_status":proposal.status}),
+            );
+        }
+        let message = format!(
+            "Review this exact ART Knowledge Proposal.\n\nProposal ID: {}\nRevision: {}\nKnowledge key: {}\nTitle: {}\nApplicability: {}\nSensitivity: {:?}\nRisk: {:?}\nSource-set hash: {}\nDraft hash: {}\n\nComplete proposed Markdown:\n\n{}\n\nChoose approve, request_changes, or reject and provide a required reason (1-1000 characters).",
+            proposal.id,
+            proposal.revision,
+            proposal.draft.knowledge_key,
+            proposal.draft.title,
+            proposal.draft.applicability,
+            proposal.draft.sensitivity,
+            proposal.draft.risk,
+            proposal.source_set_hash,
+            snapshot.draft_hash,
+            proposal.draft.markdown,
+        );
+        let schema = ElicitationSchema::builder()
+            .required_enum_schema(
+                "decision",
+                EnumSchema::builder(vec![
+                    "approve".into(),
+                    "request_changes".into(),
+                    "reject".into(),
+                ])
+                .description("Choose one human review decision")
+                .build(),
+            )
+            .required_string_with("reason", |schema| schema.length(1, 1000))
+            .build()
+            .map_err(|error| tool_error(ArtError::Internal(error.into())))?;
+        let response = match elicit_form::<ReviewElicitationResponse>(
+            peer,
+            message,
+            schema,
+            self.elicitation_timeout,
+        )
+        .await
+        {
+            Ok(Some(response)) => response,
+            Ok(None) | Err(ElicitationError::NoContent) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("ELICITATION_NO_CONTENT"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserDeclined) => {
+                return governance_output(
+                    input,
+                    "declined",
+                    Some("USER_DECLINED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserCancelled) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("USER_CANCELLED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::CapabilityNotSupported) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_UNSUPPORTED"),
+                    json!({
+                        "proposal_status": proposal.status,
+                        "next_action": "open_governance_ui"
+                    }),
+                );
+            }
+            Err(ElicitationError::ParseError { .. }) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INVALID_RESPONSE"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(_) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INTERRUPTED"),
+                    json!({"proposal_status": proposal.status, "retryable": true}),
+                );
+            }
+        };
+        let reason = response.reason.trim();
+        if reason.is_empty() || reason.chars().count() > 1000 {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("ELICITATION_INVALID_RESPONSE"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        if self.source_revalidation_reason(proposal).is_some() {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("SOURCE_STALE"),
+                json!({"proposal_status": "stale"}),
+            );
+        }
+        let decision = match response.decision.as_str() {
+            "approve" => "approved",
+            "request_changes" => "changes_requested",
+            "reject" => "rejected",
+            _ => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INVALID_RESPONSE"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+        };
+        let review = self.knowledge_vault.review_exact(
+            snapshot,
+            ReviewActor::Human(elicitation_actor(peer, &self.agent_id, &self.host_binding)),
+            decision,
+            reason,
+        );
+        if let Err(error) = review {
+            return match error {
+                ArtError::SourceStale => governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("SOURCE_STALE"),
+                    json!({"proposal_status":"stale"}),
+                ),
+                ArtError::InvalidStateTransition => governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("INVALID_GOVERNANCE_STATE"),
+                    json!({"proposal_status":self.knowledge_vault.proposal(&proposal.id).map_err(tool_error)?.status}),
+                ),
+                other => Err(tool_error(other)),
+            };
+        }
+        let updated = self
+            .knowledge_vault
+            .proposal(&proposal.id)
+            .map_err(tool_error)?;
+        if updated.status == ProposalStatus::UnderReview {
+            governance_output(
+                input,
+                "operator_action_required",
+                Some("INDEPENDENT_REVIEW_REQUIRED"),
+                json!({"proposal_status": updated.status}),
+            )
+        } else {
+            governance_output(
+                input,
+                "reviewed",
+                None,
+                json!({"proposal_status": updated.status}),
+            )
+        }
+    }
+
+    async fn publish_by_elicitation(
+        &self,
+        input: &KnowledgeGovernanceInput,
+        proposal: &KnowledgeProposal,
+        snapshot: &GovernanceSnapshot,
+        peer: &Peer<RoleServer>,
+    ) -> Result<Json<ToolOutput>, String> {
+        if proposal.status != ProposalStatus::Approved {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("INVALID_GOVERNANCE_STATE"),
+                json!({"proposal_status":proposal.status}),
+            );
+        }
+        let edition_number = self
+            .knowledge_vault
+            .next_edition_number(&proposal.draft.knowledge_key)
+            .map_err(tool_error)?;
+        let message = format!(
+            "Confirm publication of this exact approved ART Knowledge Proposal as shared immutable Edition #{}.\n\nProposal ID: {}\nRevision: {}\nKnowledge key: {}\nTitle: {}\nApplicability: {}\nSensitivity: {:?}\nRisk: {:?}\nSource-set hash: {}\nDraft hash: {}\n\nComplete approved Markdown:\n\n{}\n\nSet confirm=true only if this exact approved content should be published.",
+            edition_number,
+            proposal.id,
+            proposal.revision,
+            proposal.draft.knowledge_key,
+            proposal.draft.title,
+            proposal.draft.applicability,
+            proposal.draft.sensitivity,
+            proposal.draft.risk,
+            proposal.source_set_hash,
+            snapshot.draft_hash,
+            proposal.draft.markdown,
+        );
+        let schema = ElicitationSchema::builder()
+            .required_bool("confirm")
+            .build()
+            .map_err(|error| tool_error(ArtError::Internal(error.into())))?;
+        let response = match elicit_form::<PublishElicitationResponse>(
+            peer,
+            message,
+            schema,
+            self.elicitation_timeout,
+        )
+        .await
+        {
+            Ok(Some(response)) => response,
+            Ok(None) | Err(ElicitationError::NoContent) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("ELICITATION_NO_CONTENT"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserDeclined) => {
+                return governance_output(
+                    input,
+                    "declined",
+                    Some("USER_DECLINED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::UserCancelled) => {
+                return governance_output(
+                    input,
+                    "cancelled",
+                    Some("USER_CANCELLED"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(ElicitationError::CapabilityNotSupported) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_UNSUPPORTED"),
+                    json!({
+                        "proposal_status": proposal.status,
+                        "next_action": "open_governance_ui"
+                    }),
+                );
+            }
+            Err(ElicitationError::ParseError { .. }) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INVALID_RESPONSE"),
+                    json!({"proposal_status": proposal.status}),
+                );
+            }
+            Err(_) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("ELICITATION_INTERRUPTED"),
+                    json!({"proposal_status": proposal.status, "retryable": true}),
+                );
+            }
+        };
+        if !response.confirm {
+            return governance_output(
+                input,
+                "declined",
+                Some("PUBLICATION_NOT_CONFIRMED"),
+                json!({"proposal_status": proposal.status}),
+            );
+        }
+        if self.source_revalidation_reason(proposal).is_some() {
+            return governance_output(
+                input,
+                "operator_action_required",
+                Some("SOURCE_STALE"),
+                json!({"proposal_status": "stale"}),
+            );
+        }
+        let edition = match self
+            .knowledge_vault
+            .publish_exact(snapshot, edition_number, true)
+        {
+            Ok(edition) => edition,
+            Err(ArtError::SourceStale) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("SOURCE_STALE"),
+                    json!({"proposal_status":"stale"}),
+                );
+            }
+            Err(ArtError::InvalidStateTransition | ArtError::DuplicateConflict) => {
+                return governance_output(
+                    input,
+                    "operator_action_required",
+                    Some("INVALID_GOVERNANCE_STATE"),
+                    json!({"proposal_status":self.knowledge_vault.proposal(&proposal.id).map_err(tool_error)?.status}),
+                );
+            }
+            Err(other) => return Err(tool_error(other)),
+        };
+        governance_output(
+            input,
+            "published",
+            None,
+            json!({
+                "proposal_status": "materialized",
+                "edition_id": edition.edition_id,
+                "edition_number": edition.edition_number,
+                "knowledge_key": edition.knowledge_key,
+                "markdown_sha256": edition.markdown_sha256,
+                "manifest_sha256": edition.manifest_sha256,
+            }),
+        )
+    }
+
+    fn source_revalidation_reason(&self, proposal: &KnowledgeProposal) -> Option<&'static str> {
+        for source in &proposal.sources {
+            if source.source_type != ProposalSourceType::PrivateMemory
+                || source.owner_agent_id.as_ref() != Some(&self.agent_id)
+            {
+                return Some("SOURCE_REVALIDATION_UNAVAILABLE");
+            }
+            let Some(revision) = source.source_revision else {
+                return Some("SOURCE_STALE");
+            };
+            let Ok((memory, anchor_set_hash)) = self
+                .private_vault
+                .read_source_revision(&source.source_id, revision)
+            else {
+                return Some("SOURCE_STALE");
+            };
+            if memory.current_hash != source.source_content_hash
+                || source.anchor_set_hash.as_deref() != Some(anchor_set_hash.as_str())
+            {
+                return Some("SOURCE_STALE");
+            }
+        }
+        None
+    }
+}
+
+async fn elicit_form<T>(
+    peer: &Peer<RoleServer>,
+    message: String,
+    requested_schema: ElicitationSchema,
+    timeout: Duration,
+) -> Result<Option<T>, ElicitationError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let supports_explicit_form = peer.peer_info().is_some_and(|info| {
+        info.capabilities
+            .elicitation
+            .as_ref()
+            .is_some_and(|capability| capability.form.is_some())
+    });
+    if !supports_explicit_form {
+        return Err(ElicitationError::CapabilityNotSupported);
+    }
+    let response: ElicitResult = peer
+        .create_elicitation_with_timeout(
+            ElicitRequestParams::FormElicitationParams {
+                meta: None,
+                message,
+                requested_schema,
+            },
+            Some(timeout),
+        )
+        .await
+        .map_err(ElicitationError::Service)?;
+    match response.action {
+        ElicitationAction::Accept => {
+            let content = response.content.ok_or(ElicitationError::NoContent)?;
+            serde_json::from_value(content.clone())
+                .map(Some)
+                .map_err(|error| ElicitationError::ParseError {
+                    error,
+                    data: content,
+                })
+        }
+        ElicitationAction::Decline => Err(ElicitationError::UserDeclined),
+        _ => Err(ElicitationError::UserCancelled),
+    }
+}
+
+fn elicitation_actor(peer: &Peer<RoleServer>, agent_id: &AgentId, host_binding: &str) -> String {
+    let client = peer.peer_info().map(|info| {
+        json!({
+            "name": info.client_info.name,
+            "version": info.client_info.version,
+        })
+    });
+    let identity = canonical_json_hash(&json!({
+        "agent_id": agent_id.as_str(),
+        "host_binding": host_binding,
+        "client": client,
+        "transport": "local_mcp_elicitation",
+    }));
+    format!("mcp-elicitation:{}", &identity[..16])
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn governance_output(
+    input: &KnowledgeGovernanceInput,
+    outcome: &str,
+    reason_code: Option<&str>,
+    extra: Value,
+) -> Result<Json<ToolOutput>, String> {
+    let operation = match input.operation {
+        KnowledgeGovernanceOperation::Review => "review",
+        KnowledgeGovernanceOperation::Publish => "publish",
+        KnowledgeGovernanceOperation::ApproveAndPublish => "approve_and_publish",
+    };
+    let mut value = json!({
+        "schema": "art.mcp.v1",
+        "operation": operation,
+        "proposal_id": input.proposal_id,
+        "revision": input.revision,
+        "outcome": outcome,
+    });
+    if let Some(reason_code) = reason_code {
+        value["reason_code"] = json!(reason_code);
+    }
+    if let (Some(target), Some(source)) = (value.as_object_mut(), extra.as_object()) {
+        target.extend(source.clone());
+    }
+    Ok(Json(ToolOutput::from_value(value)?))
 }
 
 pub async fn run_stdio_server(server: ArtMcpServer) -> ArtResult<()> {

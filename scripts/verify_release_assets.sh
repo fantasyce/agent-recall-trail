@@ -19,7 +19,13 @@ for t in ('darwin_arm64','linux_amd64'):
   assert prov['version']==v and prov['commit']==c and prov['target']==t and prov['binary_sha256']==hashlib.sha256(bins[t]).hexdigest()
   assert not private_build_paths.search(bins[t]), f'{t} binary contains an absolute build-host path'
 with zipfile.ZipFile(d/f'agent-recall-trail_{v}.mcpb') as a:
- assert a.namelist()==sorted(a.namelist()); m=json.loads(a.read('manifest.json')); assert m['version']==v and len(m['tools'])==6
+ assert a.namelist()==sorted(a.namelist()); m=json.loads(a.read('manifest.json'))
+ assert m['version']==v
+ assert {tool['name'] for tool in m['tools']} == {
+  'art_recall', 'art_read', 'art_memory_capture', 'art_knowledge_propose',
+  'art_knowledge_governance', 'art_governance_ui_open', 'art_feedback',
+  'art_health',
+ }
  assert a.read('server/art-darwin-arm64')==bins['darwin_arm64']; assert a.read('server/art-linux-amd64')==bins['linux_amd64']
 r=json.loads((d/'server.json').read_text()); assert r['version']==v and r['packages'][0]['fileSha256']==hashlib.sha256((d/f'agent-recall-trail_{v}.mcpb').read_bytes()).hexdigest()
 s=json.loads((d/'sbom.spdx.json').read_text()); assert s['spdxVersion']=='SPDX-2.3' and s['packages']

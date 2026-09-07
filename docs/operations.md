@@ -76,8 +76,13 @@ semantic path with a safe diagnostic; it never silently changes ranking.
 1. Agent captures sourced private memory.
 2. Human assures, disputes, supersedes, or archives through `art memory` commands.
 3. Agent creates a knowledge proposal from exact memory references.
-4. Human inspects the proposal and sources, then approves, requests changes, or rejects.
-5. Human publishes with `--confirm`.
+4. In default-off `human_review` mode, the Agent calls
+   `art_governance_ui_open` and the host opens ART's local page. The human
+   reviews and publishes there; status and audit remain on the same page.
+5. In `delegated_local` mode, one unambiguous current user instruction allows
+   one `approve_and_publish` call. ART derives authority fields, moves directly
+   from Submitted to Materialized, and records linked `AgentDelegated`
+   receipts. Full Access alone never enables delegation.
 6. Human verifies or revokes an Edition. Existing Edition files remain immutable.
 
 ## Import and export
@@ -87,9 +92,11 @@ semantic path with a safe diagnostic; it never silently changes ranking.
 After a human reviews one exact Markdown file, `art knowledge proposal
 compose-file` creates a `FileSnapshot`-locked proposal. It requires the
 expected SHA-256 and rejects symbolic links, hard links, non-Markdown files,
-unsafe source identifiers, and digest mismatches. The separate human
-`knowledge review approve` and `knowledge publish --confirm` steps remain
-mandatory; the MCP surface never exposes them.
+unsafe source identifiers, and digest mismatches. Human review and publication
+are completed in the ART local governance page. On compatible non-Codex/DSH
+clients, the existing separate MCP form Elicitations remain available. When
+persistent delegation is enabled for the bound Agent and host, one unambiguous
+user instruction may instead use the atomic delegated operation.
 
 For a complete reviewed tree, `scripts/migrate_markdown_knowledge.py` stages
 the deterministic scan, composes each file separately, invokes the same human
