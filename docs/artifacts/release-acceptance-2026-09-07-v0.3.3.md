@@ -32,7 +32,7 @@
 | recorded | This report and ART release memory bind final evidence | pending |
 | cleaned | Authorized temporary state and non-main branches are absent | pending |
 
-## Timing ledger
+## Timing record
 
 | State | Started | Ended | Kind | Input | Receipt / reason |
 |---|---|---|---|---|---|
@@ -40,6 +40,7 @@
 | candidate-rework-1 | 2026-09-07T14:02:05+08:00 | 2026-09-07T14:02:08+08:00 | rework | `84092d9` | First local aggregate used the ordinary test binary and correctly failed the private-build-path scan |
 | candidate-rework-2 | 2026-09-07T14:02:32+08:00 | 2026-09-07T14:03:18+08:00 | rework | `84092d9` | Official remapped build passed path scanning and exposed the stale seven-tool MCP bundle assertion |
 | candidate-fix | 2026-09-07T14:03:18+08:00 | 2026-09-07T14:05:18+08:00 | active | pending commit | Verifier now requires the exact eight-tool set; the full release gate now builds and verifies aggregate release assets |
+| authorization-1 | 2026-09-07T14:06:14+08:00 | 2026-09-07T14:07:05+08:00 | rework | `bd7cd80` | All earlier checks passed; independent-product-expression scan rejected one generic release-process term in this report |
 
 ## Release evidence
 
