@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4 - 2026-09-07
+
+- Expose `art_memory_capture.anchors[].kind` as the exact eight-value MCP enum
+  already used by the domain model.
+- Reject unknown anchor kinds at input decoding with canonical alternatives
+  instead of a generic runtime validation error.
+- Document the source-anchor vocabulary in the bundled Codex and DSH skills.
+
 ## 0.3.3 - 2026-09-07
 
 - Added an ART-owned loopback governance page for Codex Desktop and DSH settings, review, publication, status, and audit.

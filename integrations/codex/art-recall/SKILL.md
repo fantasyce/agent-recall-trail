@@ -29,6 +29,12 @@ Use the configured `art_*` MCP tools as the only interface to ART memory and kno
 ## Capture and knowledge
 
 - Capture only reusable, non-obvious experience with a typed payload, narrow scope, sensitivity, idempotency key, and verifiable source anchor.
+- Select the anchor kind exactly from `host_session_range`, `user_statement`,
+  `file_snapshot`, `git_object`, `command_receipt`, `test_receipt`,
+  `log_excerpt`, or `external_document`. Use session/user/file/Git kinds for
+  stable sources, receipt/log kinds for bounded execution evidence, and
+  `external_document` for a versioned document or public URL; never abbreviate
+  the values to `git` or `url`.
 - Do not store secrets, raw transcripts, credentials, or third-party text without an allowed source anchor.
 - Propose shared knowledge only when it is stable, sanitized, broadly useful, and bound to exact source revisions.
 - Read `art_health.governance_mode` before governance. The default-off

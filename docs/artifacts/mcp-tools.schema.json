@@ -37,11 +37,99 @@
       }
     },
     {
+      "name": "art_governance_ui_open",
+      "description": "Open a short-lived ART local governance page for pending proposals, settings, or audit. The returned loopback URL is bound to this Agent and host.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UiView": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "settings",
+              "audit"
+            ]
+          }
+        },
+        "type": "object",
+        "properties": {
+          "view": {
+            "$ref": "#/$defs/UiView"
+          },
+          "proposal_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "view"
+        ]
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
       "name": "art_health",
       "description": "Return bounded health for this process, bound identity, private Vault, shared index, and pending recoveries without private content.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": true,
+        "type": "object"
+      }
+    },
+    {
+      "name": "art_knowledge_governance",
+      "description": "Govern an exact Knowledge Proposal revision. Human review uses the local governance page or supported MCP elicitation; when persistent delegated_local mode is enabled, one explicit current user instruction may authorize the bound Agent to approve and publish in one operation.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "KnowledgeGovernanceOperation": {
+            "type": "string",
+            "enum": [
+              "review",
+              "publish",
+              "approve_and_publish"
+            ]
+          }
+        },
+        "type": "object",
+        "properties": {
+          "operation": {
+            "$ref": "#/$defs/KnowledgeGovernanceOperation"
+          },
+          "proposal_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "operation",
+          "proposal_id",
+          "revision"
+        ]
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -321,7 +409,7 @@
             "type": "object",
             "properties": {
               "kind": {
-                "type": "string"
+                "$ref": "#/$defs/AnchorKind"
               },
               "locator": {
                 "type": "string"
@@ -351,6 +439,19 @@
             "required": [
               "kind",
               "locator"
+            ]
+          },
+          "AnchorKind": {
+            "type": "string",
+            "enum": [
+              "host_session_range",
+              "user_statement",
+              "file_snapshot",
+              "git_object",
+              "command_receipt",
+              "test_receipt",
+              "log_excerpt",
+              "external_document"
             ]
           }
         },

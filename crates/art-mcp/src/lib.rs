@@ -77,7 +77,7 @@ pub struct ReadInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SourceAnchorInput {
-    pub kind: String,
+    pub kind: AnchorKind,
     pub locator: String,
     pub source_version: Option<String>,
     pub source_digest: Option<String>,
@@ -366,7 +366,7 @@ impl ArtMcpServer {
             .map(|anchor| {
                 SourceAnchor::new_with_source(
                     self.agent_id.clone(),
-                    parse_anchor_kind(&anchor.kind)?,
+                    anchor.kind,
                     anchor.locator,
                     anchor.source_version,
                     anchor.source_digest,
@@ -1261,20 +1261,6 @@ fn parse_scope(kind: &str, key: &str) -> ArtResult<MemoryScope> {
         "machine" => Ok(MemoryScope::Machine(key.into())),
         "user" => Ok(MemoryScope::User(key.into())),
         _ => Err(ArtError::InvalidInput("invalid scope".into())),
-    }
-}
-
-fn parse_anchor_kind(kind: &str) -> ArtResult<AnchorKind> {
-    match kind {
-        "host_session_range" => Ok(AnchorKind::HostSessionRange),
-        "user_statement" => Ok(AnchorKind::UserStatement),
-        "file_snapshot" => Ok(AnchorKind::FileSnapshot),
-        "git_object" => Ok(AnchorKind::GitObject),
-        "command_receipt" => Ok(AnchorKind::CommandReceipt),
-        "test_receipt" => Ok(AnchorKind::TestReceipt),
-        "log_excerpt" => Ok(AnchorKind::LogExcerpt),
-        "external_document" => Ok(AnchorKind::ExternalDocument),
-        _ => Err(ArtError::InvalidInput("invalid anchor kind".into())),
     }
 }
 

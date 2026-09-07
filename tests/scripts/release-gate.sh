@@ -13,6 +13,7 @@ python3 tests/scripts/test_beir_harness.py
 ART_BIN="$cargo_target_dir/debug/art" bash tests/scripts/test_migration.sh
 cargo test --release -p art-retrieval --test performance_contracts -- --ignored
 bash scripts/build_release_binary.sh
+ART_BIN="$release_art" bash tests/scripts/test_generated_artifacts.sh
 ART_BIN="$release_art" bash tests/scripts/test_release_version.sh
 ART_BIN="$release_art" bash tests/scripts/test_plugin_surface.sh
 ART_BIN="$release_art" bash tests/scripts/test_install_lifecycle.sh
@@ -21,7 +22,7 @@ trap 'rm -rf "$release_dist"' EXIT
 release_commit="$(git rev-parse HEAD)"
 ART_RELEASE_COMMIT="$release_commit" bash scripts/build_release_assets.sh "$release_dist" darwin_arm64 "$release_art"
 ART_RELEASE_COMMIT="$release_commit" bash scripts/build_release_assets.sh "$release_dist" linux_amd64 "$release_art"
-bash scripts/verify_release_assets.sh "$release_dist" 0.3.3 "$release_commit"
+bash scripts/verify_release_assets.sh "$release_dist" 0.3.4 "$release_commit"
 bash scripts/test_site.sh
 bash scripts/test_launch_surface.sh
 bash scripts/open_source_check.sh

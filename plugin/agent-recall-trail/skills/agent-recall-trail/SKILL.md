@@ -37,6 +37,18 @@ source anchors and scope; omit secrets, full transcripts, unrestricted command
 output, and temporary Recall Bundles. Correct an existing memory with an exact
 expected revision instead of silently creating a contradictory duplicate.
 
+Use only the anchor kinds exposed by the tool schema:
+
+- `host_session_range` for a bounded host conversation or task range;
+- `user_statement` for an explicit statement by the current user;
+- `file_snapshot` for content observed at a stable file version or digest;
+- `git_object` for a commit, tag, tree, or blob identity;
+- `command_receipt` and `test_receipt` for bounded execution evidence;
+- `log_excerpt` for a scoped, non-secret diagnostic excerpt;
+- `external_document` for a versioned document or public URL.
+
+Do not shorten these values to intuitive aliases such as `git` or `url`.
+
 Use `art_feedback` to record a useful or conflicting retrieval. Create a
 knowledge proposal only from exact, authorized source revisions.
 
