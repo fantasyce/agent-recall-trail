@@ -1,22 +1,33 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
-use art_domain::{ArtError, ArtResult, agent::AgentId, knowledge::ReviewActor};
+use art_domain::{
+    ArtError, ArtResult,
+    agent::AgentId,
+    knowledge::{ProposalStatus, ReviewActor, RiskLevel},
+};
 use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use axum::{
     Json, Router,
-    extract::{Query, State},
-    http::{HeaderMap, StatusCode, header},
+    extract::{Query, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
+use pulldown_cmark::{Options, Parser, html};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use similar::{ChangeTag, TextDiff};
 use tokio::{net::TcpListener, sync::Mutex};
 use url::Url;
 
-const SESSION_LIFETIME: Duration = Duration::from_mins(10);
+const SESSION_LIFETIME: Duration = Duration::from_mins(30);
 const INDEX_HTML: &str = include_str!("../assets/governance/index.html");
 const STYLES_CSS: &str = include_str!("../assets/governance/styles.css");
 const APP_JS: &str = include_str!("../assets/governance/app.js");
@@ -48,6 +59,7 @@ struct StoredSession {
     view: UiView,
     proposal_id: Option<String>,
     revision: Option<u32>,
+    authorized_proposals: BTreeSet<(String, u32)>,
 }
 
 #[derive(Debug)]
@@ -98,6 +110,19 @@ impl GovernanceUiManager {
                 .map_err(|error| ArtError::Internal(error.to_string()))?;
         let (proposal_id, revision) =
             proposal.map_or((None, None), |(id, revision)| (Some(id), Some(revision)));
+        let authorized_proposals = if let (Some(id), Some(revision)) = (&proposal_id, revision) {
+            BTreeSet::from([(id.clone(), revision)])
+        } else if view == UiView::Pending {
+            self.state
+                .vault
+                .list_proposals()?
+                .into_iter()
+                .filter(is_actionable)
+                .map(|proposal| (proposal.id, proposal.revision))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
         self.state
             .sessions
             .write()
@@ -110,6 +135,7 @@ impl GovernanceUiManager {
                     view,
                     proposal_id: proposal_id.clone(),
                     revision,
+                    authorized_proposals,
                 },
             );
         let url = Url::parse_with_params(
@@ -166,10 +192,27 @@ fn router(state: AppState) -> Router {
         .route("/styles.css", get(styles))
         .route("/app.js", get(script))
         .route("/api/bootstrap", get(bootstrap))
+        .route("/api/proposal-detail", get(proposal_detail))
         .route("/api/delegation", post(update_delegation))
         .route("/api/review", post(review))
         .route("/api/publish", post(publish))
         .with_state(state)
+        .layer(middleware::from_fn(security_headers))
+}
+
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 async fn index() -> Html<&'static str> {
@@ -210,6 +253,12 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
     let proposals = match state.vault.list_proposals() {
         Ok(proposals) => proposals
             .into_iter()
+            .filter(is_actionable)
+            .filter(|proposal| {
+                session
+                    .authorized_proposals
+                    .contains(&(proposal.id.clone(), proposal.revision))
+            })
             .take(100)
             .map(|proposal| {
                 json!({
@@ -221,7 +270,7 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
                     "applicability": proposal.draft.applicability,
                     "sensitivity": proposal.draft.sensitivity,
                     "risk": proposal.draft.risk,
-                    "source_set_hash": proposal.source_set_hash,
+                    "updated_at": proposal.updated_at,
                 })
             })
             .collect::<Vec<_>>(),
@@ -258,10 +307,203 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
         "bound_agent_id": state.agent_id.as_str(),
         "host_binding": &state.host_binding_hash[..12],
         "governance_mode": mode,
+        "actionable_count": proposals.len(),
         "proposals": proposals,
         "audit": audit.into_iter().rev().take(100).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+fn is_actionable(proposal: &art_domain::knowledge::KnowledgeProposal) -> bool {
+    matches!(
+        proposal.status,
+        ProposalStatus::Submitted | ProposalStatus::UnderReview | ProposalStatus::Approved
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct ProposalDetailQuery {
+    session: String,
+    proposal_id: String,
+    revision: u32,
+}
+
+async fn proposal_detail(
+    State(state): State<AppState>,
+    Query(query): Query<ProposalDetailQuery>,
+) -> Response {
+    let session = match authorized_session(&state, &query.session) {
+        Ok(session) => session,
+        Err(status) => return status.into_response(),
+    };
+    if !session
+        .authorized_proposals
+        .contains(&(query.proposal_id.clone(), query.revision))
+    {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let proposal = match state.vault.proposal(&query.proposal_id) {
+        Ok(proposal) => proposal,
+        Err(error) => return art_error_response(&error),
+    };
+    if proposal.revision != query.revision {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let reviews = match state
+        .vault
+        .proposal_reviews(&proposal.id, proposal.revision)
+    {
+        Ok(reviews) => reviews,
+        Err(error) => return art_error_response(&error),
+    };
+    let current = match state.vault.verified_current(&proposal.draft.knowledge_key) {
+        Ok(current) => current,
+        Err(error) => return art_error_response(&error),
+    };
+    let predicted_edition_number = match state
+        .vault
+        .next_edition_number(&proposal.draft.knowledge_key)
+    {
+        Ok(number) => number,
+        Err(error) => return art_error_response(&error),
+    };
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+    let canonical_markdown = canonical_review_markdown(
+        &proposal.draft.applicability,
+        &proposal.draft.markdown,
+    );
+    let rendered_html = render_markdown(&canonical_markdown);
+    let (current_edition, comparison) = current.map_or_else(
+        || {
+            (
+                serde_json::Value::Null,
+                json!({
+                    "kind": "first_edition",
+                    "message": "This is the first Edition; all proposal content is new.",
+                    "groups": [],
+                }),
+            )
+        },
+        |verified| {
+            let comparison = line_diff(&verified.canonical_markdown, &canonical_markdown);
+            let record = verified.record;
+            (
+                json!({
+                    "edition_id": record.edition_id,
+                    "edition_number": record.edition_number,
+                    "title": record.title,
+                    "published_at": record.published_at,
+                    "markdown_sha256": record.markdown_sha256,
+                    "manifest_sha256": record.manifest_sha256,
+                    "canonical_markdown": verified.canonical_markdown,
+                }),
+                json!({"kind":"line_diff","context_lines":3,"groups":comparison}),
+            )
+        },
+    );
+    let needs_independent_review = matches!(proposal.draft.risk, RiskLevel::Elevated | RiskLevel::High)
+        && proposal
+            .sources
+            .iter()
+            .map(|source| &source.source_content_hash)
+            .collect::<BTreeSet<_>>()
+            .len()
+            < 2
+        && proposal.status == ProposalStatus::UnderReview;
+    let allowed_actions: Vec<&str> = match proposal.status {
+        ProposalStatus::Submitted => vec!["approved", "changes_requested", "rejected"],
+        ProposalStatus::UnderReview => vec!["changes_requested", "rejected"],
+        ProposalStatus::Approved => vec!["publish"],
+        _ => Vec::new(),
+    };
+    Json(json!({
+        "schema": "art.governance.proposal-detail.v1",
+        "proposal": {
+            "proposal_id": proposal.id,
+            "revision": proposal.revision,
+            "status": proposal.status,
+            "knowledge_key": proposal.draft.knowledge_key,
+            "title": proposal.draft.title,
+            "sensitivity": proposal.draft.sensitivity,
+            "risk": proposal.draft.risk,
+            "author_agent_id": proposal.author_agent_id,
+            "created_at": proposal.created_at,
+            "updated_at": proposal.updated_at,
+            "draft_hash": snapshot.draft_hash,
+            "source_set_hash": proposal.source_set_hash,
+        },
+        "content": {
+            "applicability_markdown": proposal.draft.applicability,
+            "knowledge_markdown": proposal.draft.markdown,
+            "canonical_markdown": canonical_markdown,
+            "rendered_html": rendered_html,
+        },
+        "sources": proposal.sources,
+        "reviews": reviews,
+        "current_edition": current_edition,
+        "comparison": comparison,
+        "predicted_edition_number": predicted_edition_number,
+        "allowed_actions": allowed_actions,
+        "requirements": {
+            "independent_review_required": needs_independent_review,
+            "can_satisfy_in_current_session": !needs_independent_review,
+            "message": if needs_independent_review {
+                "A distinct reviewer is required; this local session cannot claim a second identity."
+            } else {
+                "No additional review is currently required."
+            },
+        },
+    }))
+    .into_response()
+}
+
+fn canonical_review_markdown(applicability: &str, knowledge: &str) -> String {
+    format!(
+        "## Applicability\n\n{}\n\n## Knowledge\n\n{}",
+        applicability.trim(),
+        knowledge.trim()
+    )
+}
+
+fn render_markdown(markdown: &str) -> String {
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS;
+    let parser = Parser::new_ext(markdown, options);
+    let mut rendered = String::new();
+    html::push_html(&mut rendered, parser);
+    ammonia::Builder::default()
+        .rm_tags(["img"])
+        .link_rel(Some("noopener noreferrer"))
+        .clean(&rendered)
+        .to_string()
+}
+
+fn line_diff(previous: &str, proposed: &str) -> Vec<Vec<serde_json::Value>> {
+    let diff = TextDiff::from_lines(previous, proposed);
+    diff.grouped_ops(3)
+        .iter()
+        .map(|group| {
+            group
+                .iter()
+                .flat_map(|operation| diff.iter_changes(operation))
+                .map(|change| {
+                    let (kind, label) = match change.tag() {
+                        ChangeTag::Delete => ("removed", "Removed"),
+                        ChangeTag::Insert => ("added", "Added"),
+                        ChangeTag::Equal => ("unchanged", "Unchanged"),
+                    };
+                    json!({
+                        "kind": kind,
+                        "label": label,
+                        "old_line": change.old_index().map(|index| index + 1),
+                        "new_line": change.new_index().map(|index| index + 1),
+                        "text": change.value().trim_end_matches('\n'),
+                    })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
