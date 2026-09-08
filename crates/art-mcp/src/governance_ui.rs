@@ -278,21 +278,23 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
             })
             .collect::<Vec<_>>();
     let mut audit = Vec::new();
-    for proposal in &all_proposals {
-        match state.vault.delegated_receipts(&proposal.id) {
-            Ok(receipts) => audit.extend(receipts.into_iter().map(|receipt| {
-                json!({
-                    "operation": receipt.operation,
-                    "proposal_id": receipt.proposal_id,
-                    "revision": receipt.proposal_revision,
-                    "edition_id": receipt.edition_id,
-                    "actor_type": receipt.actor_type,
-                    "agent_id": receipt.agent_id,
-                    "host_binding": &receipt.host_binding_hash[..12],
-                    "created_at": receipt.created_at,
-                })
-            })),
-            Err(error) => return internal_error_response(&error),
+    if session.view == UiView::Audit {
+        for proposal in &all_proposals {
+            match state.vault.delegated_receipts(&proposal.id) {
+                Ok(receipts) => audit.extend(receipts.into_iter().map(|receipt| {
+                    json!({
+                        "operation": receipt.operation,
+                        "proposal_id": receipt.proposal_id,
+                        "revision": receipt.proposal_revision,
+                        "edition_id": receipt.edition_id,
+                        "actor_type": receipt.actor_type,
+                        "agent_id": receipt.agent_id,
+                        "host_binding": &receipt.host_binding_hash[..12],
+                        "created_at": receipt.created_at,
+                    })
+                })),
+                Err(error) => return internal_error_response(&error),
+            }
         }
     }
     Json(json!({
@@ -515,7 +517,13 @@ async fn update_delegation(
     headers: HeaderMap,
     Json(request): Json<DelegationRequest>,
 ) -> Response {
-    if let Err(response) = authorized_mutation(&state, &headers, &request.session, None) {
+    if let Err(response) = authorized_mutation(
+        &state,
+        &headers,
+        &request.session,
+        UiView::Settings,
+        None,
+    ) {
         return response.into_response();
     }
     match state.vault.set_delegation_mode(
@@ -550,6 +558,7 @@ async fn review(
         &state,
         &headers,
         &request.session,
+        UiView::Pending,
         Some((&request.proposal_id, request.revision)),
     ) {
         return response.into_response();
@@ -618,6 +627,7 @@ async fn publish(
         &state,
         &headers,
         &request.session,
+        UiView::Pending,
         Some((&request.proposal_id, request.revision)),
     ) {
         return response.into_response();
@@ -667,9 +677,13 @@ fn authorized_mutation(
     state: &AppState,
     headers: &HeaderMap,
     capability: &str,
+    expected_view: UiView,
     proposal: Option<(&str, u32)>,
 ) -> Result<StoredSession, StatusCode> {
     let session = authorized_session(state, capability)?;
+    if session.view != expected_view {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let origin = state
         .origin
         .read()

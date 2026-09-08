@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'">
   <title>ART governance</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
@@ -17,7 +17,7 @@
         <h1>知识治理台</h1>
       </div>
       <div class="binding" aria-label="当前身份">
-        <span id="connection-dot" class="connection-dot"></span>
+        <span id="connection-dot" class="connection-dot" aria-hidden="true"></span>
         <span id="agent-label">正在连接本机 ART…</span>
       </div>
     </header>
@@ -51,12 +51,12 @@
         </div>
       </section>
       <section id="pending-view" class="view" aria-labelledby="pending-title" hidden>
-        <div class="section-heading">
-          <p class="folio">QUEUE / 02</p>
+        <div class="section-heading queue-heading">
+          <p class="folio">QUEUE / <span id="queue-count">0</span></p>
           <h2 id="pending-title">待处理提案</h2>
-          <p>这里显示经过来源锁定的知识提案。人工模式下可在此审核并发布。</p>
+          <p>先查看完整正文、锁定来源、差异和审核历史，再作决定。队列不提供快捷批准或发布。</p>
         </div>
-        <div id="proposal-list" class="record-list"></div>
+        <div id="proposal-list" class="record-list" aria-busy="true"></div>
       </section>
       <section id="audit-view" class="view" aria-labelledby="audit-title" hidden>
         <div class="section-heading">
@@ -72,6 +72,95 @@
       <span>只监听 127.0.0.1</span>
     </footer>
   </div>
-  <div id="status" class="status" role="status" aria-live="polite"></div>
+
+  <dialog id="proposal-dialog" aria-labelledby="proposal-title" aria-describedby="proposal-description">
+    <article class="drawer">
+      <header class="drawer-header">
+        <div class="drawer-heading">
+          <p class="eyebrow">Exact proposal review</p>
+          <h2 id="proposal-title">知识提案详情</h2>
+          <p id="proposal-description">正在读取精确提案版本及其锁定证据。</p>
+          <div id="proposal-labels" class="label-row" aria-label="提案状态"></div>
+        </div>
+        <div class="drawer-tools">
+          <span id="drawer-time" class="session-time">本地会话</span>
+          <button id="close-detail" class="icon-button" type="button" aria-label="关闭提案详情">×</button>
+        </div>
+      </header>
+      <div id="session-warning" class="notice warning" role="status" hidden>审核会话将在五分钟内结束。请完成或复制尚未提交的理由。</div>
+      <div id="detail-state" class="notice" role="status">正在读取完整提案…</div>
+      <div id="detail-content" class="drawer-scroll" hidden>
+        <ol id="provenance-spine" class="provenance-spine" aria-label="治理进度">
+          <li data-stage="draft">草稿 <span>Draft</span></li>
+          <li data-stage="sources">来源 <span>Sources</span></li>
+          <li data-stage="decision">决定 <span>Decision</span></li>
+          <li data-stage="publication">发布 <span>Publication</span></li>
+        </ol>
+        <dl id="proposal-metadata" class="metadata-grid"></dl>
+        <section class="content-section" aria-labelledby="content-title">
+          <div class="section-label"><p class="card-kicker">待审核内容</p><h3 id="content-title">完整提案正文</h3></div>
+          <div class="detail-tabs" role="tablist" aria-label="提案内容视图">
+            <button id="knowledge-tab" type="button" role="tab" aria-selected="true" aria-controls="knowledge-panel" tabindex="0">知识</button>
+            <button id="raw-tab" type="button" role="tab" aria-selected="false" aria-controls="raw-panel" tabindex="-1">原始 Markdown</button>
+            <button id="changes-tab" type="button" role="tab" aria-selected="false" aria-controls="changes-panel" tabindex="-1">变更</button>
+          </div>
+          <div id="knowledge-panel" class="tab-panel rendered-markdown reading-column" role="tabpanel" aria-labelledby="knowledge-tab"></div>
+          <div id="raw-panel" class="tab-panel" role="tabpanel" aria-labelledby="raw-tab" hidden><pre id="raw-markdown" class="raw-markdown" tabindex="0"></pre></div>
+          <div id="changes-panel" class="tab-panel" role="tabpanel" aria-labelledby="changes-tab" hidden><div id="comparison"></div></div>
+        </section>
+        <section class="evidence-section" aria-labelledby="sources-title">
+          <div class="section-label"><p class="card-kicker">Locked evidence</p><h3 id="sources-title">锁定来源</h3></div>
+          <div id="source-records" class="source-records"></div>
+        </section>
+        <section class="evidence-section" aria-labelledby="edition-title">
+          <div class="section-label"><p class="card-kicker">Current baseline</p><h3 id="edition-title">当前 Edition</h3></div>
+          <div id="current-edition" class="evidence-card"></div>
+        </section>
+        <section class="evidence-section" aria-labelledby="history-title">
+          <div class="section-label"><p class="card-kicker">Decision record</p><h3 id="history-title">审核历史</h3></div>
+          <ol id="review-history" class="review-history"></ol>
+        </section>
+        <section class="evidence-section" aria-labelledby="requirements-title">
+          <div class="section-label"><p class="card-kicker">Governance requirements</p><h3 id="requirements-title">治理要求</h3></div>
+          <div id="requirements" class="evidence-card"></div>
+        </section>
+        <section id="review-result" class="notice success" aria-live="polite" tabindex="-1" hidden></section>
+        <form id="decision-form" class="inline-panel" hidden novalidate>
+          <fieldset>
+            <legend id="decision-legend">提交审核决定</legend>
+            <p id="decision-target" class="exact-target"></p>
+            <label for="review-reason">审核理由 <span aria-hidden="true">*</span></label>
+            <textarea id="review-reason" name="reason" rows="5" required minlength="1" maxlength="1000" aria-describedby="review-help review-error"></textarea>
+            <p id="review-help" class="field-help">去除首尾空格后需为 1–1,000 个字符。</p>
+            <p id="review-error" class="field-error" role="alert" hidden></p>
+            <div class="panel-actions">
+              <button id="cancel-decision" type="button" class="action">取消</button>
+              <button id="submit-decision" type="submit" class="action primary">提交决定</button>
+            </div>
+          </fieldset>
+        </form>
+        <section id="publish-confirmation" class="inline-panel" aria-labelledby="publish-title" hidden>
+          <h3 id="publish-title">确认发布不可变 Edition</h3>
+          <dl id="publish-summary" class="metadata-grid compact"></dl>
+          <p>发布后会生成不可变的共享 Knowledge Edition。该操作不会编辑当前提案正文。</p>
+          <div class="panel-actions">
+            <button id="cancel-publish" type="button" class="action">取消</button>
+            <button id="confirm-publish" type="button" class="action primary">发布 Edition</button>
+          </div>
+        </section>
+        <section id="publication-receipt" class="receipt" aria-labelledby="receipt-title" hidden>
+          <p class="card-kicker">Publication receipt</p>
+          <h3 id="receipt-title">Edition 已发布</h3>
+          <dl id="receipt-fields" class="metadata-grid compact"></dl>
+          <button id="close-receipt" type="button" class="action primary">返回已刷新队列</button>
+        </section>
+      </div>
+      <footer id="drawer-footer" class="drawer-footer" hidden>
+        <p id="action-context">只会提交页首所示的精确提案版本。</p>
+        <div id="detail-actions" class="actions"></div>
+      </footer>
+    </article>
+  </dialog>
+  <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>

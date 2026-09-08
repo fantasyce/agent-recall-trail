@@ -483,3 +483,134 @@ async fn stale_or_invalid_review_requests_fail_without_a_governance_write() {
     assert_eq!(replay.status(), StatusCode::CONFLICT);
     assert_eq!(vault.proposal_reviews(&proposal.id, 1).unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn governance_ui_serves_the_accessible_detail_workspace_assets() {
+    let root = tempdir().unwrap();
+    let manager = GovernanceUiManager::new(
+        KnowledgeVault::open(root.path(), [67_u8; 32]).unwrap(),
+        AgentId::from_str("codex-primary").unwrap(),
+        "1".repeat(64),
+    );
+    let session = manager.open_session(UiView::Pending, None).await.unwrap();
+    let client = Client::new();
+    let html = client
+        .get(session.url.clone())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(html.contains("<dialog id=\"proposal-dialog\""));
+    assert!(html.contains("aria-labelledby=\"proposal-title\""));
+    assert!(html.contains("aria-describedby=\"proposal-description\""));
+    assert!(html.contains("role=\"tablist\""));
+    assert!(html.contains("id=\"review-reason\""));
+    assert!(html.contains("maxlength=\"1000\""));
+    assert!(html.contains("aria-live=\"polite\""));
+
+    let script = client
+        .get(session.url.join("/app.js").unwrap())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(script.contains("openProposal"));
+    assert!(script.contains("loadProposalDetail"));
+    assert!(script.contains("enterConflict"));
+    assert!(script.contains("enterExpired"));
+    assert!(script.contains("审核详情"));
+    assert!(!script.contains("window.prompt"));
+    assert!(!script.contains("window.confirm"));
+
+    let styles = client
+        .get(session.url.join("/styles.css").unwrap())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(styles.contains("width: min(880px, 72vw)"));
+    assert!(styles.contains("@media (max-width: 759px)"));
+    assert!(styles.contains("@media (prefers-reduced-motion: reduce)"));
+}
+
+#[tokio::test]
+async fn governance_session_view_limits_each_mutation_surface() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let host = "2".repeat(64);
+    let vault = KnowledgeVault::open(root.path(), [68_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("governance.view", "View bound", "bounded"),
+            vec![source(&agent, "artm_view")],
+            "view-bound",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+    let manager = GovernanceUiManager::new(vault.clone(), agent.clone(), host.clone());
+    let settings = manager.open_session(UiView::Settings, None).await.unwrap();
+    let pending = manager.open_session(UiView::Pending, None).await.unwrap();
+    let client = Client::new();
+    let settings_bootstrap: serde_json::Value = client
+        .get(settings.url.join("/api/bootstrap").unwrap())
+        .query(&[("session", settings.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pending_bootstrap: serde_json::Value = client
+        .get(pending.url.join("/api/bootstrap").unwrap())
+        .query(&[("session", pending.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let review = client
+        .post(settings.url.join("/api/review").unwrap())
+        .header("origin", &settings.origin)
+        .header("x-art-csrf", settings_bootstrap["csrf_token"].as_str().unwrap())
+        .json(&serde_json::json!({
+            "session": settings.capability,
+            "proposal_id": proposal.id,
+            "revision": proposal.revision,
+            "status": "submitted",
+            "draft_hash": snapshot.draft_hash,
+            "source_set_hash": snapshot.source_set_hash,
+            "decision": "approved",
+            "reason": "wrong view"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(review.status(), StatusCode::FORBIDDEN);
+    assert!(vault.proposal_reviews(&proposal.id, 1).unwrap().is_empty());
+
+    let delegation = client
+        .post(pending.url.join("/api/delegation").unwrap())
+        .header("origin", &pending.origin)
+        .header("x-art-csrf", pending_bootstrap["csrf_token"].as_str().unwrap())
+        .json(&serde_json::json!({
+            "session": pending.capability,
+            "mode": "delegated_local"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delegation.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        vault.delegation_mode(&agent, &host).unwrap(),
+        DelegationMode::HumanReview
+    );
+}
