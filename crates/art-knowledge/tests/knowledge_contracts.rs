@@ -300,6 +300,103 @@ fn published_fixture(
     (root, edition)
 }
 
+#[test]
+fn proposal_review_history_is_exact_and_ordered_by_commit_time() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [56_u8; 32]).unwrap();
+    let mut draft = KnowledgeDraft::minimal(
+        "governance.history",
+        "Review history",
+        "The review basis is retained.",
+    );
+    draft.risk = RiskLevel::Elevated;
+    let proposal = vault
+        .propose(
+            &agent,
+            draft,
+            vec![source(&agent)],
+            "governance-history",
+        )
+        .unwrap();
+
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("reviewer-a".into()),
+            "first independent review",
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("reviewer-b".into()),
+            "second independent review",
+        )
+        .unwrap();
+
+    let reviews = vault
+        .proposal_reviews(&proposal.id, proposal.revision)
+        .unwrap();
+    assert_eq!(reviews.len(), 2);
+    assert_eq!(reviews[0].actor, "reviewer-a");
+    assert_eq!(reviews[0].reason, "first independent review");
+    assert_eq!(reviews[1].actor, "reviewer-b");
+    assert_eq!(reviews[1].decision, "approved");
+    assert!(reviews[0].decided_at <= reviews[1].decided_at);
+    assert!(vault.proposal_reviews(&proposal.id, 2).unwrap().is_empty());
+}
+
+#[test]
+fn verified_current_returns_canonical_review_markdown_and_rejects_tampering() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [57_u8; 32]).unwrap();
+    assert!(vault.verified_current("governance.current").unwrap().is_none());
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft {
+                knowledge_key: "governance.current".into(),
+                title: "Current Edition".into(),
+                applicability: "review workspaces".into(),
+                markdown: "Use the exact approved body.".into(),
+                sensitivity: Sensitivity::Internal,
+                risk: RiskLevel::Normal,
+            },
+            vec![source(&agent)],
+            "governance-current",
+        )
+        .unwrap();
+    vault
+        .approve(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("reviewer".into()),
+            "source checked",
+        )
+        .unwrap();
+    let edition = vault.publish(&proposal.id, proposal.revision, true).unwrap();
+
+    let verified = vault
+        .verified_current("governance.current")
+        .unwrap()
+        .unwrap();
+    assert_eq!(verified.record.edition_id, edition.edition_id);
+    assert_eq!(
+        verified.canonical_markdown,
+        "## Applicability\n\nreview workspaces\n\n## Knowledge\n\nUse the exact approved body."
+    );
+
+    std::fs::write(&edition.markdown_path, "tampered").unwrap();
+    assert!(matches!(
+        vault.verified_current("governance.current"),
+        Err(ArtError::IndexDegraded)
+    ));
+}
+
 fn publish_search_fixture(
     vault: &KnowledgeVault,
     agent: &AgentId,

@@ -57,6 +57,24 @@ pub struct EditionRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProposalReviewRecord {
+    pub id: String,
+    pub proposal_id: String,
+    pub proposal_revision: u32,
+    pub source_set_hash: String,
+    pub decision: String,
+    pub actor: String,
+    pub reason: String,
+    pub decided_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifiedEdition {
+    pub record: EditionRecord,
+    pub canonical_markdown: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegatedGovernanceReceipt {
     pub id: String,
     pub operation: String,
@@ -366,6 +384,50 @@ impl KnowledgeVault {
             .map_err(db_error)?;
         ids.map(|id| self.proposal(&id.map_err(db_error)?))
             .collect()
+    }
+
+    pub fn proposal_reviews(
+        &self,
+        id: &str,
+        revision: u32,
+    ) -> ArtResult<Vec<ProposalReviewRecord>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id,proposal_id,proposal_revision,source_set_hash,decision,actor,reason,decided_at FROM proposal_reviews WHERE proposal_id=?1 AND proposal_revision=?2 ORDER BY decided_at ASC,id ASC",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![id, revision], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })
+            .map_err(db_error)?;
+        rows.map(|row| {
+            let (id, proposal_id, proposal_revision, source_set_hash, decision, actor, reason, decided_at) =
+                row.map_err(db_error)?;
+            Ok(ProposalReviewRecord {
+                id,
+                proposal_id,
+                proposal_revision,
+                source_set_hash,
+                decision,
+                actor,
+                reason,
+                decided_at: chrono::DateTime::parse_from_rfc3339(&decided_at)
+                    .map_err(internal_error)?
+                    .with_timezone(&Utc),
+            })
+        })
+        .collect()
     }
 
     pub fn approve(
@@ -823,6 +885,33 @@ impl KnowledgeVault {
         let connection = self.connection()?;
         let id: Option<String> = connection.query_row("SELECT edition_id FROM edition_projections WHERE knowledge_key=?1 AND current=1 AND revoked=0", [key], |row| row.get(0)).optional().map_err(db_error)?;
         self.read(&id.ok_or(ArtError::NotFound)?)
+    }
+
+    pub fn verified_current(&self, key: &str) -> ArtResult<Option<VerifiedEdition>> {
+        let connection = self.connection()?;
+        let id: Option<String> = connection
+            .query_row(
+                "SELECT edition_id FROM edition_projections WHERE knowledge_key=?1 AND current=1 AND revoked=0",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let record = self.read(&id)?;
+        let markdown = fs::read_to_string(&record.markdown_path).map_err(io_error)?;
+        let applicability = edition_section(&markdown, "Applicability")
+            .ok_or(ArtError::IndexDegraded)?;
+        let knowledge =
+            edition_section(&markdown, "Knowledge").ok_or(ArtError::IndexDegraded)?;
+        Ok(Some(VerifiedEdition {
+            record,
+            canonical_markdown: format!(
+                "## Applicability\n\n{applicability}\n\n## Knowledge\n\n{knowledge}"
+            ),
+        }))
     }
 
     pub fn read(&self, id: &str) -> ArtResult<EditionRecord> {
