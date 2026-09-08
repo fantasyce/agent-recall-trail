@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 1.98, Axum 0.8, SQLite/rusqlite, pulldown-cmark 0.13.4, ammonia 4.1.4, similar 3.2.0, embedded HTML/CSS/vanilla JavaScript, reqwest contract tests, browser automation, Bash/Python release gates.
 
-**Spec:** `/Users/fanhcy/Documents/projects/agent-recall-trail/docs/superpowers/specs/2026-09-09-art-governance-proposal-detail-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-09-art-governance-proposal-detail-design.md`
 
 ## Global Constraints
 
@@ -138,4 +138,3 @@
 - [ ] **Step 5: Verify security failure journeys.** Exercise malicious Markdown, wrong proposal/revision, stale snapshot, expired session, lost server, bad Origin/CSRF, and independent-review limitation; confirm disabled/no-write behavior and copy-preserved entered reason.
 - [ ] **Step 6: Clean task residue.** Stop attributed listeners/processes, remove only task-created ART homes, proposals, temporary host configurations, browser profiles, release staging, and build intermediates whose purpose ended; retain the final deliverables and acceptance artifact.
 - [ ] **Step 7: Re-run final Git and residue checks.** Report branch/worktree state, exact retained files, final disk impact, attributed listening ports/processes, required/optional skipped coverage, and whether any user-owned untracked files remain outside the worktree.
-
