@@ -27,6 +27,12 @@ Use only `mcp__art__art_*` for ART memory and knowledge operations.
 ## Capture and knowledge
 
 - Capture only reusable, non-obvious, sourced experience with the documented typed payload, narrow scope, sensitivity, and idempotency key.
+- Select the anchor kind exactly from `host_session_range`, `user_statement`,
+  `file_snapshot`, `git_object`, `command_receipt`, `test_receipt`,
+  `log_excerpt`, or `external_document`. Use session/user/file/Git kinds for
+  stable sources, receipt/log kinds for bounded execution evidence, and
+  `external_document` for a versioned document or public URL; never abbreviate
+  the values to `git` or `url`.
 - Do not store secrets, credentials, raw transcripts, or unapproved third-party content.
 - Propose shared knowledge only when stable, sanitized, and locked to exact source revisions.
 - Read `art_health.governance_mode` first. The default-off `human_review` mode

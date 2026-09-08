@@ -2,6 +2,7 @@ use std::{fs, str::FromStr};
 
 use art_domain::{
     agent::{AgentId, ArtPaths},
+    anchor::AnchorKind,
     memory::{MemoryPayload, ProcedurePayload, Sensitivity},
 };
 use art_mcp::{
@@ -113,6 +114,75 @@ fn tool_surface_is_exactly_eight_agent_safe_tools() {
     );
 }
 
+#[test]
+fn anchor_kind_is_an_exact_enum_in_the_memory_capture_schema() {
+    let (_root, server) = server();
+    let tools: serde_json::Value = serde_json::from_str(&server.tool_schema_json()).unwrap();
+    let capture = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "art_memory_capture")
+        .unwrap();
+    let anchor = &capture["inputSchema"]["$defs"]["SourceAnchorInput"];
+    let kind = &anchor["properties"]["kind"];
+    let kind_schema = kind.get("enum").map_or_else(
+        || {
+            let pointer = kind["$ref"]
+                .as_str()
+                .and_then(|reference| reference.strip_prefix('#'))
+                .expect("anchor kind must be an inline or referenced enum");
+            capture["inputSchema"]
+                .pointer(pointer)
+                .expect("anchor kind reference must resolve inside inputSchema")
+        },
+        |_| kind,
+    );
+    assert_eq!(
+        kind_schema["enum"],
+        json!([
+            "host_session_range",
+            "user_statement",
+            "file_snapshot",
+            "git_object",
+            "command_receipt",
+            "test_receipt",
+            "log_excerpt",
+            "external_document"
+        ])
+    );
+}
+
+#[test]
+fn invalid_anchor_kind_reports_canonical_alternatives() {
+    let error = serde_json::from_value::<MemoryCaptureInput>(json!({
+        "title": "Invalid anchor vocabulary",
+        "summary": "The request must fail before persistence.",
+        "payload": {
+            "kind": "semantic",
+            "data": {
+                "statement": "invalid",
+                "applicability": "schema regression",
+                "exceptions": []
+            }
+        },
+        "scope_type": "repository",
+        "scope_key": "agent-recall-trail",
+        "sensitivity": "private",
+        "idempotency_key": "invalid-anchor-kind",
+        "anchors": [{
+            "kind": "git",
+            "locator": "commit:deadbeef"
+        }]
+    }))
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("unknown variant `git`"), "{error}");
+    assert!(error.contains("git_object"), "{error}");
+    assert!(error.contains("external_document"), "{error}");
+}
+
 #[tokio::test]
 async fn governance_ui_open_returns_a_bounded_loopback_session() {
     let (_root, server) = server();
@@ -215,7 +285,7 @@ async fn capture_then_recall_stays_bound_to_process_identity() {
         sensitivity: Sensitivity::Private,
         idempotency_key: "mcp-capture-1".into(),
         anchors: vec![SourceAnchorInput {
-            kind: "test_receipt".into(),
+            kind: AnchorKind::TestReceipt,
             locator: "test:mcp-eof".into(),
             source_version: Some("1".into()),
             source_digest: Some("sha256:abc".into()),
@@ -278,7 +348,7 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
             sensitivity: Sensitivity::Private,
             idempotency_key: "revision-original".into(),
             anchors: vec![SourceAnchorInput {
-                kind: "user_statement".into(),
+                kind: AnchorKind::UserStatement,
                 locator: "test:revision-one".into(),
                 source_version: None,
                 source_digest: None,
@@ -306,7 +376,7 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
         sensitivity: Sensitivity::Private,
         idempotency_key: "revision-update".into(),
         anchors: vec![SourceAnchorInput {
-            kind: "user_statement".into(),
+            kind: AnchorKind::UserStatement,
             locator: "test:revision-two".into(),
             source_version: None,
             source_digest: None,
@@ -342,7 +412,7 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
             sensitivity: Sensitivity::Private,
             idempotency_key: "revision-stale".into(),
             anchors: vec![SourceAnchorInput {
-                kind: "user_statement".into(),
+                kind: AnchorKind::UserStatement,
                 locator: "test:revision-stale".into(),
                 source_version: None,
                 source_digest: None,
@@ -443,7 +513,7 @@ async fn original_six_agent_safe_tools_keep_success_paths_and_stale_reads_fail_c
             sensitivity: Sensitivity::Internal,
             idempotency_key: "all-tools-capture".into(),
             anchors: vec![SourceAnchorInput {
-                kind: "test_receipt".into(),
+                kind: AnchorKind::TestReceipt,
                 locator: "test:all-tools".into(),
                 source_version: None,
                 source_digest: Some("sha256:all-tools".into()),

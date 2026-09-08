@@ -12,7 +12,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 manifest = json.loads((root / ".codex-plugin/plugin.json").read_text())
 assert manifest["name"] == "agent-recall-trail"
-assert manifest["version"] == "0.3.3"
+assert manifest["version"] == "0.3.4"
 assert manifest["skills"] == "./skills/"
 assert manifest["mcpServers"] == "./.mcp.json"
 assert manifest["interface"]["displayName"] == "Agent Recall Trail"
@@ -36,6 +36,18 @@ for phrase in [
 ]:
     assert phrase in skill, phrase
 assert "CLI fallback" not in skill
+anchor_kinds = [
+    "host_session_range",
+    "user_statement",
+    "file_snapshot",
+    "git_object",
+    "command_receipt",
+    "test_receipt",
+    "log_excerpt",
+    "external_document",
+]
+for kind in anchor_kinds:
+    assert kind in skill, ("bundled skill", kind)
 for integration in [
     root.parents[1] / "integrations/codex/art-recall/SKILL.md",
     root.parents[1] / "integrations/dsh/art-recall/SKILL.md",
@@ -44,6 +56,8 @@ for integration in [
     for phrase in ["art_governance_ui_open", "delegated_local", "approve_and_publish", "AgentDelegated"]:
         assert phrase in content, (integration, phrase)
     assert "CLI fallback" not in content
+    for kind in anchor_kinds:
+        assert kind in content, (integration, kind)
 policy = (root / "skills/agent-recall-trail/agents/openai.yaml").read_text()
 assert "allow_implicit_invocation: true" in policy
 bundle_manifest = json.loads((root.parents[1] / "packaging/mcpb/manifest.json.in").read_text())

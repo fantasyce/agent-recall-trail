@@ -150,9 +150,67 @@ class PluginLaunchTests(unittest.TestCase):
             # A skill naming an unavailable operation is a broken consumer contract.
             references = set(re.findall(r"`(art_[a-z_]+)`", (PLUGIN / "skills/agent-recall-trail/SKILL.md").read_text()))
             self.assertFalse(references - names, f"Skill references unavailable tools: {references - names}")
+            capture_tool = next(tool for tool in tools if tool["name"] == "art_memory_capture")
+            input_schema = capture_tool["inputSchema"]
+            kind_schema = input_schema["$defs"]["SourceAnchorInput"]["properties"]["kind"]
+            kind_schema = input_schema["$defs"][kind_schema["$ref"].rsplit("/", 1)[-1]]
+            self.assertEqual(kind_schema["enum"], [
+                "host_session_range", "user_statement", "file_snapshot", "git_object",
+                "command_receipt", "test_receipt", "log_excerpt", "external_document",
+            ])
             health = self.request(process, 3, "tools/call", {"name": "art_health", "arguments": {}})
             self.assertFalse(health.get("isError", False))
             self.assertEqual(health["structuredContent"]["bound_agent_id"], "codex-primary")
+            capture_arguments = {
+                "title": "Packaged anchor contract",
+                "summary": "The packaged MCP accepts canonical Git and external document evidence.",
+                "payload": {"kind": "semantic", "data": {
+                    "statement": "canonical anchors accepted",
+                    "applicability": "packaged MCP launch test",
+                    "exceptions": [],
+                }},
+                "scope_type": "repository",
+                "scope_key": "agent-recall-trail",
+                "sensitivity": "private",
+                "idempotency_key": "packaged-anchor-contract",
+                "anchors": [
+                    {"kind": "git_object", "locator": "commit:920cf0c"},
+                    {"kind": "external_document", "locator": "https://example.test/art-anchor-contract"},
+                ],
+            }
+            captured = self.request(process, 4, "tools/call", {
+                "name": "art_memory_capture", "arguments": capture_arguments,
+            })
+            self.assertFalse(captured.get("isError", False), captured)
+            replay = self.request(process, 5, "tools/call", {
+                "name": "art_memory_capture", "arguments": capture_arguments,
+            })
+            self.assertEqual(
+                captured["structuredContent"]["memory_id"],
+                replay["structuredContent"]["memory_id"],
+            )
+            for identifier, alias in [(6, "git"), (7, "url")]:
+                invalid = dict(capture_arguments)
+                invalid["title"] = f"invalid-alias-{alias}-must-not-persist"
+                invalid["idempotency_key"] = f"invalid-anchor-alias-{alias}"
+                invalid["anchors"] = [{"kind": alias, "locator": f"test:{alias}"}]
+                response = self.exchange(process, identifier, "tools/call", {
+                    "name": "art_memory_capture", "arguments": invalid,
+                })
+                error_text = json.dumps(response.get("error", response.get("result", {})))
+                self.assertIn(alias, error_text)
+                self.assertIn("git_object", error_text)
+                self.assertIn("external_document", error_text)
+            absent = self.request(process, 8, "tools/call", {
+                "name": "art_recall",
+                "arguments": {
+                    "query": "invalid-alias-must-not-persist",
+                    "mode": "lexical",
+                    "detail": "recall",
+                },
+            })
+            self.assertFalse(absent.get("isError", False), absent)
+            self.assertEqual(absent["structuredContent"]["private_memories"], [])
         finally:
             process.stdin.close()
             try:
@@ -167,6 +225,11 @@ class PluginLaunchTests(unittest.TestCase):
         self.assertEqual(stderr, "")
 
     def request(self, process, identifier, method, params):
+        response = self.exchange(process, identifier, method, params)
+        self.assertNotIn("error", response)
+        return response["result"]
+
+    def exchange(self, process, identifier, method, params):
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}) + "\n")
         process.stdin.flush()
         deadline = time.monotonic() + 10
@@ -181,8 +244,7 @@ class PluginLaunchTests(unittest.TestCase):
         response = json.loads(line)
         self.assertEqual(response.get("jsonrpc"), "2.0")
         self.assertEqual(response.get("id"), identifier)
-        self.assertNotIn("error", response)
-        return response["result"]
+        return response
 
 
 if __name__ == "__main__":
