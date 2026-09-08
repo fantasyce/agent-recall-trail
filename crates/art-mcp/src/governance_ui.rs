@@ -255,28 +255,28 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
         Err(error) => return internal_error_response(&error),
     };
     let proposals = all_proposals
-            .iter()
-            .filter(|proposal| is_actionable(proposal))
-            .filter(|proposal| {
-                session
-                    .authorized_proposals
-                    .contains(&(proposal.id.clone(), proposal.revision))
+        .iter()
+        .filter(|proposal| is_actionable(proposal))
+        .filter(|proposal| {
+            session
+                .authorized_proposals
+                .contains(&(proposal.id.clone(), proposal.revision))
+        })
+        .take(100)
+        .map(|proposal| {
+            json!({
+                "proposal_id": &proposal.id,
+                "revision": proposal.revision,
+                "status": proposal.status,
+                "knowledge_key": &proposal.draft.knowledge_key,
+                "title": &proposal.draft.title,
+                "applicability": &proposal.draft.applicability,
+                "sensitivity": proposal.draft.sensitivity,
+                "risk": proposal.draft.risk,
+                "updated_at": proposal.updated_at,
             })
-            .take(100)
-            .map(|proposal| {
-                json!({
-                    "proposal_id": &proposal.id,
-                    "revision": proposal.revision,
-                    "status": proposal.status,
-                    "knowledge_key": &proposal.draft.knowledge_key,
-                    "title": &proposal.draft.title,
-                    "applicability": &proposal.draft.applicability,
-                    "sensitivity": proposal.draft.sensitivity,
-                    "risk": proposal.draft.risk,
-                    "updated_at": proposal.updated_at,
-                })
-            })
-            .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     let mut audit = Vec::new();
     if session.view == UiView::Audit {
         for proposal in &all_proposals {
@@ -368,10 +368,8 @@ async fn proposal_detail(
         Err(error) => return art_error_response(&error),
     };
     let snapshot = GovernanceSnapshot::from_proposal(&proposal);
-    let canonical_markdown = canonical_review_markdown(
-        &proposal.draft.applicability,
-        &proposal.draft.markdown,
-    );
+    let canonical_markdown =
+        canonical_review_markdown(&proposal.draft.applicability, &proposal.draft.markdown);
     let rendered_html = render_markdown(&canonical_markdown);
     let (current_edition, comparison) = current.map_or_else(
         || {
@@ -401,15 +399,16 @@ async fn proposal_detail(
             )
         },
     );
-    let needs_independent_review = matches!(proposal.draft.risk, RiskLevel::Elevated | RiskLevel::High)
-        && proposal
-            .sources
-            .iter()
-            .map(|source| &source.source_content_hash)
-            .collect::<BTreeSet<_>>()
-            .len()
-            < 2
-        && proposal.status == ProposalStatus::UnderReview;
+    let needs_independent_review =
+        matches!(proposal.draft.risk, RiskLevel::Elevated | RiskLevel::High)
+            && proposal
+                .sources
+                .iter()
+                .map(|source| &source.source_content_hash)
+                .collect::<BTreeSet<_>>()
+                .len()
+                < 2
+            && proposal.status == ProposalStatus::UnderReview;
     let allowed_actions: Vec<&str> = match proposal.status {
         ProposalStatus::Submitted => vec!["approved", "changes_requested", "rejected"],
         ProposalStatus::UnderReview => vec!["changes_requested", "rejected"],
@@ -466,9 +465,8 @@ fn canonical_review_markdown(applicability: &str, knowledge: &str) -> String {
 }
 
 fn render_markdown(markdown: &str) -> String {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(markdown, options);
     let mut rendered = String::new();
     html::push_html(&mut rendered, parser);
@@ -517,13 +515,9 @@ async fn update_delegation(
     headers: HeaderMap,
     Json(request): Json<DelegationRequest>,
 ) -> Response {
-    if let Err(response) = authorized_mutation(
-        &state,
-        &headers,
-        &request.session,
-        UiView::Settings,
-        None,
-    ) {
+    if let Err(response) =
+        authorized_mutation(&state, &headers, &request.session, UiView::Settings, None)
+    {
         return response.into_response();
     }
     match state.vault.set_delegation_mode(
@@ -639,11 +633,10 @@ async fn publish(
         source_set_hash: request.source_set_hash.clone(),
         draft_hash: request.draft_hash.clone(),
     };
-    match state.vault.publish_exact(
-        &snapshot,
-        request.predicted_edition_number,
-        request.confirm,
-    ) {
+    match state
+        .vault
+        .publish_exact(&snapshot, request.predicted_edition_number, request.confirm)
+    {
         Ok(edition) => Json(json!({
             "schema": "art.governance.publication-receipt.v1",
             "ok": true,
@@ -731,4 +724,39 @@ fn random_token() -> ArtResult<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| ArtError::Internal(error.to_string()))?;
     Ok(hex::encode(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+    use tempfile::tempdir;
+
+    #[test]
+    fn expired_session_is_removed_and_rejected() {
+        let root = tempdir().unwrap();
+        let state = AppState {
+            vault: KnowledgeVault::open(root.path(), [91_u8; 32]).unwrap(),
+            agent_id: AgentId::from_str("codex-primary").unwrap(),
+            host_binding_hash: "a".repeat(64),
+            sessions: Arc::new(std::sync::RwLock::new(BTreeMap::from([(
+                "expired".into(),
+                StoredSession {
+                    csrf_token: "csrf".into(),
+                    expires_at: Utc::now() - chrono::Duration::seconds(1),
+                    view: UiView::Pending,
+                    proposal_id: None,
+                    revision: None,
+                    authorized_proposals: BTreeSet::new(),
+                },
+            )]))),
+            origin: Arc::new(std::sync::RwLock::new(Some("http://127.0.0.1:1".into()))),
+        };
+
+        assert_eq!(
+            authorized_session(&state, "expired").unwrap_err(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(state.sessions.read().unwrap().is_empty());
+    }
 }

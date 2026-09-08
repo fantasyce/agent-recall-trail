@@ -312,12 +312,7 @@ fn proposal_review_history_is_exact_and_ordered_by_commit_time() {
     );
     draft.risk = RiskLevel::Elevated;
     let proposal = vault
-        .propose(
-            &agent,
-            draft,
-            vec![source(&agent)],
-            "governance-history",
-        )
+        .propose(&agent, draft, vec![source(&agent)], "governance-history")
         .unwrap();
 
     vault
@@ -354,7 +349,12 @@ fn verified_current_returns_canonical_review_markdown_and_rejects_tampering() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();
     let vault = KnowledgeVault::open(root.path(), [57_u8; 32]).unwrap();
-    assert!(vault.verified_current("governance.current").unwrap().is_none());
+    assert!(
+        vault
+            .verified_current("governance.current")
+            .unwrap()
+            .is_none()
+    );
     let proposal = vault
         .propose(
             &agent,
@@ -378,7 +378,9 @@ fn verified_current_returns_canonical_review_markdown_and_rejects_tampering() {
             "source checked",
         )
         .unwrap();
-    let edition = vault.publish(&proposal.id, proposal.revision, true).unwrap();
+    let edition = vault
+        .publish(&proposal.id, proposal.revision, true)
+        .unwrap();
 
     let verified = vault
         .verified_current("governance.current")
@@ -1007,10 +1009,12 @@ fn human_review_reason_is_trimmed_and_bounded_to_one_thousand_characters() {
             ),
             Err(ArtError::InvalidInput(_))
         ));
-        assert!(vault
-            .proposal_reviews(&proposal.id, proposal.revision)
-            .unwrap()
-            .is_empty());
+        assert!(
+            vault
+                .proposal_reviews(&proposal.id, proposal.revision)
+                .unwrap()
+                .is_empty()
+        );
     }
     let proposal = vault
         .propose(

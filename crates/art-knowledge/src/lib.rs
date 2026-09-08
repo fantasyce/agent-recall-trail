@@ -412,8 +412,16 @@ impl KnowledgeVault {
             })
             .map_err(db_error)?;
         rows.map(|row| {
-            let (id, proposal_id, proposal_revision, source_set_hash, decision, actor, reason, decided_at) =
-                row.map_err(db_error)?;
+            let (
+                id,
+                proposal_id,
+                proposal_revision,
+                source_set_hash,
+                decision,
+                actor,
+                reason,
+                decided_at,
+            ) = row.map_err(db_error)?;
             Ok(ProposalReviewRecord {
                 id,
                 proposal_id,
@@ -905,10 +913,9 @@ impl KnowledgeVault {
         };
         let record = self.read(&id)?;
         let markdown = fs::read_to_string(&record.markdown_path).map_err(io_error)?;
-        let applicability = edition_section(&markdown, "Applicability")
-            .ok_or(ArtError::IndexDegraded)?;
-        let knowledge =
-            edition_section(&markdown, "Knowledge").ok_or(ArtError::IndexDegraded)?;
+        let applicability =
+            edition_section(&markdown, "Applicability").ok_or(ArtError::IndexDegraded)?;
+        let knowledge = edition_section(&markdown, "Knowledge").ok_or(ArtError::IndexDegraded)?;
         Ok(Some(VerifiedEdition {
             record,
             canonical_markdown: format!(

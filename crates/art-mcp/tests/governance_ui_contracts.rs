@@ -201,7 +201,10 @@ async fn proposal_detail_is_summary_separated_exact_authorized_and_sanitized() {
         "<style",
         "https://tracker.example",
     ] {
-        assert!(!rendered.contains(forbidden), "rendered HTML kept {forbidden}");
+        assert!(
+            !rendered.contains(forbidden),
+            "rendered HTML kept {forbidden}"
+        );
     }
     assert!(!rendered.contains(&exact.capability));
 
@@ -364,7 +367,12 @@ async fn exact_review_and_publish_return_authoritative_receipts() {
     let published: serde_json::Value = published.json().await.unwrap();
     assert_eq!(published["schema"], "art.governance.publication-receipt.v1");
     assert_eq!(published["edition_number"], 1);
-    assert!(published["edition_id"].as_str().unwrap().starts_with("arke_"));
+    assert!(
+        published["edition_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("arke_")
+    );
     assert_eq!(published["markdown_sha256"].as_str().unwrap().len(), 64);
     assert_eq!(published["manifest_sha256"].as_str().unwrap().len(), 64);
     assert!(published["published_at"].as_str().unwrap().contains('T'));
@@ -409,8 +417,16 @@ async fn stale_or_invalid_review_requests_fail_without_a_governance_write() {
     let csrf = bootstrap["csrf_token"].as_str().unwrap();
 
     for (draft_hash, reason, expected) in [
-        ("0".repeat(64), "valid reason".to_owned(), StatusCode::CONFLICT),
-        (snapshot.draft_hash.clone(), " ".to_owned(), StatusCode::BAD_REQUEST),
+        (
+            "0".repeat(64),
+            "valid reason".to_owned(),
+            StatusCode::CONFLICT,
+        ),
+        (
+            snapshot.draft_hash.clone(),
+            " ".to_owned(),
+            StatusCode::BAD_REQUEST,
+        ),
         (
             snapshot.draft_hash.clone(),
             "x".repeat(1_001),
@@ -435,10 +451,12 @@ async fn stale_or_invalid_review_requests_fail_without_a_governance_write() {
             .await
             .unwrap();
         assert_eq!(response.status(), expected);
-        assert!(vault
-            .proposal_reviews(&proposal.id, proposal.revision)
-            .unwrap()
-            .is_empty());
+        assert!(
+            vault
+                .proposal_reviews(&proposal.id, proposal.revision)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     let rejected = client
@@ -522,6 +540,8 @@ async fn governance_ui_serves_the_accessible_detail_workspace_assets() {
     assert!(script.contains("loadProposalDetail"));
     assert!(script.contains("enterConflict"));
     assert!(script.contains("enterExpired"));
+    assert!(script.contains("5 * 60 * 1000"));
+    assert!(script.contains("readOnly = busy || ui.expired || ui.conflict"));
     assert!(script.contains("审核详情"));
     assert!(!script.contains("window.prompt"));
     assert!(!script.contains("window.confirm"));
@@ -580,7 +600,10 @@ async fn governance_session_view_limits_each_mutation_surface() {
     let review = client
         .post(settings.url.join("/api/review").unwrap())
         .header("origin", &settings.origin)
-        .header("x-art-csrf", settings_bootstrap["csrf_token"].as_str().unwrap())
+        .header(
+            "x-art-csrf",
+            settings_bootstrap["csrf_token"].as_str().unwrap(),
+        )
         .json(&serde_json::json!({
             "session": settings.capability,
             "proposal_id": proposal.id,
@@ -600,7 +623,10 @@ async fn governance_session_view_limits_each_mutation_surface() {
     let delegation = client
         .post(pending.url.join("/api/delegation").unwrap())
         .header("origin", &pending.origin)
-        .header("x-art-csrf", pending_bootstrap["csrf_token"].as_str().unwrap())
+        .header(
+            "x-art-csrf",
+            pending_bootstrap["csrf_token"].as_str().unwrap(),
+        )
         .json(&serde_json::json!({
             "session": pending.capability,
             "mode": "delegated_local"

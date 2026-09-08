@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.5 - 2026-09-09
+
+- Replaced queue shortcuts with an exact proposal-detail review workspace for
+  full content, locked sources, hashes, ordered history, and Edition comparison.
+- Added sanitized rendered Markdown, grouped line diffs, exact session
+  authorization, stale-snapshot rejection, and no-store browser protections.
+- Added accessible desktop and narrow-screen review journeys with keyboard focus,
+  expiry/conflict states, required reasons, and two-step immutable publication.
+- Added authoritative review and publication receipts while preserving the
+  existing default-off delegated-governance semantics.
+
 ## 0.3.4 - 2026-09-07
 
 - Expose `art_memory_capture.anchors[].kind` as the exact eight-value MCP enum

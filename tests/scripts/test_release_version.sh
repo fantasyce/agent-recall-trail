@@ -6,9 +6,9 @@ cd "$repo_root"
 art_bin="${ART_BIN:-target/debug/art}"
 
 cargo metadata --format-version 1 --no-deps \
-  | jq -e 'all(.packages[]; .version == "0.3.4")' >/dev/null
-test "$($art_bin --version)" = 'art 0.3.4'
-jq -e '.name == "agent-recall-trail" and .version == "0.3.4"' \
+  | jq -e 'all(.packages[]; .version == "0.3.5")' >/dev/null
+test "$($art_bin --version)" = 'art 0.3.5'
+jq -e '.name == "agent-recall-trail" and .version == "0.3.5"' \
   plugin/agent-recall-trail/.codex-plugin/plugin.json >/dev/null
 rg -q 'four explicit retrieval modes' README.md
 rg -q 'lexical.*full_scan.*semantic.*hybrid' README.md
