@@ -76,6 +76,32 @@ removal, reconnect/expiry read-only reason behavior, narrow breakpoint, and
 reduced-motion mode are deterministic automated contracts; acceptance did not
 wait 25 wall-clock minutes merely to reach the warning threshold.
 
+### ART 0.3.4 Codex in-app browser compatibility disposition
+
+A separately reported ART 0.3.4 journey showed an actionable Proposal and its
+Approve button in Codex Desktop, but the click produced no visible response;
+the same workflow succeeded after opening a fresh complete session URL in
+Chrome. The 0.3.4 source places `window.prompt()` before the review request and
+`window.confirm()` before publication. A host that does not surface those
+browser-native dialogs therefore prevents the request from being issued and
+presents as an inert button. This is the strongest source-backed explanation,
+but the original run did not capture network or console evidence, so it is not
+claimed as a conclusive diagnosis of Codex Desktop itself.
+
+The 0.3.5 UI removes both browser-native dialogs. Decisions use the visible
+inline reason form; publication uses a separate inline confirmation; busy,
+success, request failure, conflict, disconnect, and expiry states are rendered
+inside the page. The final installed-byte Codex Desktop journey above proves
+that the replacement path issues authenticated review and publication requests
+and reaches the durable Edition receipt. The requests do not depend on cookies:
+the capability is sent in the JSON body, the session CSRF value is sent in the
+`X-ART-CSRF` header, and the loopback server validates the browser-supplied
+same-origin `Origin` header.
+
+One manually truncated session token produced a 401 during the reported 0.3.4
+investigation. That response is classified as operator input error and is not
+used as reproduction or compatibility evidence.
+
 ## Final installed-host acceptance
 
 The release binary was installed into a task-owned ART Home with SHA-256
