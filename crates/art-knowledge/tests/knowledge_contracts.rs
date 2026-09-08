@@ -980,6 +980,65 @@ fn human_can_request_changes_or_reject_but_agent_cannot_review() {
 }
 
 #[test]
+fn human_review_reason_is_trimmed_and_bounded_to_one_thousand_characters() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [58_u8; 32]).unwrap();
+    for (suffix, reason) in [("blank", "   ".to_owned()), ("long", "x".repeat(1_001))] {
+        let proposal = vault
+            .propose(
+                &agent,
+                KnowledgeDraft::minimal(
+                    format!("review.reason-{suffix}"),
+                    "Reason bounds",
+                    "bounded",
+                ),
+                vec![source(&agent)],
+                &format!("reason-{suffix}"),
+            )
+            .unwrap();
+        assert!(matches!(
+            vault.review(
+                &proposal.id,
+                proposal.revision,
+                ReviewActor::Human("local-user".into()),
+                "approved",
+                &reason,
+            ),
+            Err(ArtError::InvalidInput(_))
+        ));
+        assert!(vault
+            .proposal_reviews(&proposal.id, proposal.revision)
+            .unwrap()
+            .is_empty());
+    }
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("review.reason-valid", "Valid reason", "bounded"),
+            vec![source(&agent)],
+            "reason-valid",
+        )
+        .unwrap();
+    vault
+        .review(
+            &proposal.id,
+            proposal.revision,
+            ReviewActor::Human("local-user".into()),
+            "approved",
+            "  exactly reviewed  ",
+        )
+        .unwrap();
+    assert_eq!(
+        vault
+            .proposal_reviews(&proposal.id, proposal.revision)
+            .unwrap()[0]
+            .reason,
+        "exactly reviewed"
+    );
+}
+
+#[test]
 fn elevated_single_source_knowledge_requires_two_distinct_humans() {
     let root = tempdir().unwrap();
     let agent = AgentId::from_str("codex-primary").unwrap();

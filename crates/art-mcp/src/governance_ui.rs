@@ -250,10 +250,13 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
         Ok(mode) => mode,
         Err(error) => return internal_error_response(&error),
     };
-    let proposals = match state.vault.list_proposals() {
-        Ok(proposals) => proposals
-            .into_iter()
-            .filter(is_actionable)
+    let all_proposals = match state.vault.list_proposals() {
+        Ok(proposals) => proposals,
+        Err(error) => return internal_error_response(&error),
+    };
+    let proposals = all_proposals
+            .iter()
+            .filter(|proposal| is_actionable(proposal))
             .filter(|proposal| {
                 session
                     .authorized_proposals
@@ -262,26 +265,21 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
             .take(100)
             .map(|proposal| {
                 json!({
-                    "proposal_id": proposal.id,
+                    "proposal_id": &proposal.id,
                     "revision": proposal.revision,
                     "status": proposal.status,
-                    "knowledge_key": proposal.draft.knowledge_key,
-                    "title": proposal.draft.title,
-                    "applicability": proposal.draft.applicability,
+                    "knowledge_key": &proposal.draft.knowledge_key,
+                    "title": &proposal.draft.title,
+                    "applicability": &proposal.draft.applicability,
                     "sensitivity": proposal.draft.sensitivity,
                     "risk": proposal.draft.risk,
                     "updated_at": proposal.updated_at,
                 })
             })
-            .collect::<Vec<_>>(),
-        Err(error) => return internal_error_response(&error),
-    };
+            .collect::<Vec<_>>();
     let mut audit = Vec::new();
-    for proposal in &proposals {
-        let Some(id) = proposal["proposal_id"].as_str() else {
-            continue;
-        };
-        match state.vault.delegated_receipts(id) {
+    for proposal in &all_proposals {
+        match state.vault.delegated_receipts(&proposal.id) {
             Ok(receipts) => audit.extend(receipts.into_iter().map(|receipt| {
                 json!({
                     "operation": receipt.operation,
@@ -536,6 +534,9 @@ struct ReviewRequest {
     session: String,
     proposal_id: String,
     revision: u32,
+    status: ProposalStatus,
+    draft_hash: String,
+    source_set_hash: String,
     decision: String,
     reason: String,
 }
@@ -553,18 +554,45 @@ async fn review(
     ) {
         return response.into_response();
     }
-    let proposal = match state.vault.proposal(&request.proposal_id) {
-        Ok(proposal) => proposal,
-        Err(error) => return art_error_response(&error),
+    let snapshot = GovernanceSnapshot {
+        proposal_id: request.proposal_id.clone(),
+        revision: request.revision,
+        status: request.status,
+        source_set_hash: request.source_set_hash.clone(),
+        draft_hash: request.draft_hash.clone(),
     };
-    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
     match state.vault.review_exact(
         &snapshot,
         ReviewActor::Human("local-governance-ui".into()),
         &request.decision,
         &request.reason,
     ) {
-        Ok(()) => Json(json!({"ok":true,"outcome":"reviewed"})).into_response(),
+        Ok(()) => {
+            let proposal = match state.vault.proposal(&request.proposal_id) {
+                Ok(proposal) => proposal,
+                Err(error) => return art_error_response(&error),
+            };
+            let reviews = match state
+                .vault
+                .proposal_reviews(&request.proposal_id, request.revision)
+            {
+                Ok(reviews) => reviews,
+                Err(error) => return art_error_response(&error),
+            };
+            let Some(review) = reviews.last() else {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            };
+            Json(json!({
+                "schema": "art.governance.review-receipt.v1",
+                "ok": true,
+                "proposal_id": proposal.id,
+                "revision": proposal.revision,
+                "decision": request.decision,
+                "status": proposal.status,
+                "review": review,
+            }))
+            .into_response()
+        }
         Err(error) => art_error_response(&error),
     }
 }
@@ -574,6 +602,10 @@ struct PublishRequest {
     session: String,
     proposal_id: String,
     revision: u32,
+    status: ProposalStatus,
+    draft_hash: String,
+    source_set_hash: String,
+    predicted_edition_number: u32,
     confirm: bool,
 }
 
@@ -590,24 +622,29 @@ async fn publish(
     ) {
         return response.into_response();
     }
-    let proposal = match state.vault.proposal(&request.proposal_id) {
-        Ok(proposal) => proposal,
-        Err(error) => return art_error_response(&error),
+    let snapshot = GovernanceSnapshot {
+        proposal_id: request.proposal_id.clone(),
+        revision: request.revision,
+        status: request.status,
+        source_set_hash: request.source_set_hash.clone(),
+        draft_hash: request.draft_hash.clone(),
     };
-    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
-    let next = match state
-        .vault
-        .next_edition_number(&proposal.draft.knowledge_key)
-    {
-        Ok(next) => next,
-        Err(error) => return art_error_response(&error),
-    };
-    match state.vault.publish_exact(&snapshot, next, request.confirm) {
+    match state.vault.publish_exact(
+        &snapshot,
+        request.predicted_edition_number,
+        request.confirm,
+    ) {
         Ok(edition) => Json(json!({
-            "ok":true,
-            "outcome":"published",
-            "edition_id":edition.edition_id,
-            "edition_number":edition.edition_number,
+            "schema": "art.governance.publication-receipt.v1",
+            "ok": true,
+            "proposal_id": request.proposal_id,
+            "revision": request.revision,
+            "status": "materialized",
+            "edition_id": edition.edition_id,
+            "edition_number": edition.edition_number,
+            "published_at": edition.published_at,
+            "markdown_sha256": edition.markdown_sha256,
+            "manifest_sha256": edition.manifest_sha256,
         }))
         .into_response(),
         Err(error) => art_error_response(&error),

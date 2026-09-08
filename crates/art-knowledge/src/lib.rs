@@ -477,6 +477,12 @@ impl KnowledgeVault {
         reason: &str,
         expected: Option<&GovernanceSnapshot>,
     ) -> ArtResult<()> {
+        let reason = reason.trim();
+        if !(1..=1_000).contains(&reason.chars().count()) {
+            return Err(ArtError::InvalidInput(
+                "review reason must contain 1 to 1000 characters".into(),
+            ));
+        }
         let actor_id = match actor {
             ReviewActor::Human(id) if !id.trim().is_empty() => id,
             ReviewActor::Human(_) => {
@@ -506,9 +512,6 @@ impl KnowledgeVault {
             ProposalStatus::Submitted | ProposalStatus::UnderReview
         ) {
             return Err(ArtError::InvalidStateTransition);
-        }
-        if reason.trim().is_empty() {
-            return Err(ArtError::InvalidInput("review reason is required".into()));
         }
         let next_status = match decision {
             "approved" => "approved",

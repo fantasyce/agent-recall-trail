@@ -4,7 +4,7 @@ use art_domain::{
     agent::AgentId,
     knowledge::{KnowledgeDraft, ProposalSourceLock, ProposalSourceType, ReviewActor},
 };
-use art_knowledge::{DelegationMode, KnowledgeVault};
+use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use art_mcp::governance_ui::{GovernanceUiManager, UiView};
 use reqwest::{Client, StatusCode};
 use tempfile::tempdir;
@@ -39,7 +39,9 @@ async fn governance_ui_is_loopback_session_bound_and_changes_real_policy() {
 
     assert_eq!(session.url.host_str(), Some("127.0.0.1"));
     assert_ne!(session.url.port(), Some(80));
-    assert!(session.expires_at > chrono::Utc::now());
+    let remaining = session.expires_at - chrono::Utc::now();
+    assert!(remaining >= chrono::Duration::minutes(29));
+    assert!(remaining <= chrono::Duration::minutes(30));
 
     let client = Client::new();
     let page = client.get(session.url.clone()).send().await.unwrap();
@@ -281,4 +283,203 @@ async fn proposal_detail_compares_against_hash_verified_current_edition() {
     assert!(comparison.contains("added"));
     assert!(comparison.contains("remove"));
     assert!(comparison.contains("add"));
+}
+
+#[tokio::test]
+async fn exact_review_and_publish_return_authoritative_receipts() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [65_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("governance.publish", "Publish", "review then publish"),
+            vec![source(&agent, "artm_publish")],
+            "publish-receipt",
+        )
+        .unwrap();
+    let submitted = GovernanceSnapshot::from_proposal(&proposal);
+    let manager = GovernanceUiManager::new(vault.clone(), agent, "e".repeat(64));
+    let session = manager
+        .open_session(
+            UiView::Pending,
+            Some((proposal.id.clone(), proposal.revision)),
+        )
+        .await
+        .unwrap();
+    let client = Client::new();
+    let bootstrap: serde_json::Value = client
+        .get(session.url.join("/api/bootstrap").unwrap())
+        .query(&[("session", session.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let csrf = bootstrap["csrf_token"].as_str().unwrap();
+    let reviewed = client
+        .post(session.url.join("/api/review").unwrap())
+        .header("origin", &session.origin)
+        .header("x-art-csrf", csrf)
+        .json(&serde_json::json!({
+            "session": session.capability,
+            "proposal_id": proposal.id,
+            "revision": proposal.revision,
+            "status": "submitted",
+            "draft_hash": submitted.draft_hash,
+            "source_set_hash": submitted.source_set_hash,
+            "decision": "approved",
+            "reason": "  source and scope checked  "
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reviewed.status(), StatusCode::OK);
+    let reviewed: serde_json::Value = reviewed.json().await.unwrap();
+    assert_eq!(reviewed["schema"], "art.governance.review-receipt.v1");
+    assert_eq!(reviewed["status"], "approved");
+    assert_eq!(reviewed["review"]["decision"], "approved");
+    assert_eq!(reviewed["review"]["reason"], "source and scope checked");
+
+    let approved = GovernanceSnapshot::from_proposal(&vault.proposal(&proposal.id).unwrap());
+    let published = client
+        .post(session.url.join("/api/publish").unwrap())
+        .header("origin", &session.origin)
+        .header("x-art-csrf", csrf)
+        .json(&serde_json::json!({
+            "session": session.capability,
+            "proposal_id": proposal.id,
+            "revision": proposal.revision,
+            "status": "approved",
+            "draft_hash": approved.draft_hash,
+            "source_set_hash": approved.source_set_hash,
+            "predicted_edition_number": 1,
+            "confirm": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(published.status(), StatusCode::OK);
+    let published: serde_json::Value = published.json().await.unwrap();
+    assert_eq!(published["schema"], "art.governance.publication-receipt.v1");
+    assert_eq!(published["edition_number"], 1);
+    assert!(published["edition_id"].as_str().unwrap().starts_with("arke_"));
+    assert_eq!(published["markdown_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(published["manifest_sha256"].as_str().unwrap().len(), 64);
+    assert!(published["published_at"].as_str().unwrap().contains('T'));
+    assert_eq!(
+        vault.proposal(&proposal.id).unwrap().status,
+        art_domain::knowledge::ProposalStatus::Materialized
+    );
+}
+
+#[tokio::test]
+async fn stale_or_invalid_review_requests_fail_without_a_governance_write() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let vault = KnowledgeVault::open(root.path(), [66_u8; 32]).unwrap();
+    let proposal = vault
+        .propose(
+            &agent,
+            KnowledgeDraft::minimal("governance.reject", "Reject", "unsafe basis"),
+            vec![source(&agent, "artm_reject")],
+            "reject-receipt",
+        )
+        .unwrap();
+    let snapshot = GovernanceSnapshot::from_proposal(&proposal);
+    let manager = GovernanceUiManager::new(vault.clone(), agent, "f".repeat(64));
+    let session = manager
+        .open_session(
+            UiView::Pending,
+            Some((proposal.id.clone(), proposal.revision)),
+        )
+        .await
+        .unwrap();
+    let client = Client::new();
+    let bootstrap: serde_json::Value = client
+        .get(session.url.join("/api/bootstrap").unwrap())
+        .query(&[("session", session.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let csrf = bootstrap["csrf_token"].as_str().unwrap();
+
+    for (draft_hash, reason, expected) in [
+        ("0".repeat(64), "valid reason".to_owned(), StatusCode::CONFLICT),
+        (snapshot.draft_hash.clone(), " ".to_owned(), StatusCode::BAD_REQUEST),
+        (
+            snapshot.draft_hash.clone(),
+            "x".repeat(1_001),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let response = client
+            .post(session.url.join("/api/review").unwrap())
+            .header("origin", &session.origin)
+            .header("x-art-csrf", csrf)
+            .json(&serde_json::json!({
+                "session": session.capability,
+                "proposal_id": proposal.id,
+                "revision": proposal.revision,
+                "status": "submitted",
+                "draft_hash": draft_hash,
+                "source_set_hash": snapshot.source_set_hash,
+                "decision": "rejected",
+                "reason": reason
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert!(vault
+            .proposal_reviews(&proposal.id, proposal.revision)
+            .unwrap()
+            .is_empty());
+    }
+
+    let rejected = client
+        .post(session.url.join("/api/review").unwrap())
+        .header("origin", &session.origin)
+        .header("x-art-csrf", csrf)
+        .json(&serde_json::json!({
+            "session": session.capability,
+            "proposal_id": proposal.id,
+            "revision": proposal.revision,
+            "status": "submitted",
+            "draft_hash": snapshot.draft_hash,
+            "source_set_hash": snapshot.source_set_hash,
+            "decision": "rejected",
+            "reason": "unsafe and unsupported"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::OK);
+    let rejected: serde_json::Value = rejected.json().await.unwrap();
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(vault.proposal_reviews(&proposal.id, 1).unwrap().len(), 1);
+
+    let replay = client
+        .post(session.url.join("/api/review").unwrap())
+        .header("origin", &session.origin)
+        .header("x-art-csrf", csrf)
+        .json(&serde_json::json!({
+            "session": session.capability,
+            "proposal_id": proposal.id,
+            "revision": proposal.revision,
+            "status": "submitted",
+            "draft_hash": snapshot.draft_hash,
+            "source_set_hash": snapshot.source_set_hash,
+            "decision": "approved",
+            "reason": "replay"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
+    assert_eq!(vault.proposal_reviews(&proposal.id, 1).unwrap().len(), 1);
 }
