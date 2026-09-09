@@ -2,7 +2,7 @@
 
 ART is a local-first memory and governed-knowledge product for coding agents. Every Agent gets a physically separate private Recall Trail. Stable conclusions become immutable Knowledge Editions that other Agents can retrieve without seeing private source identities or source bodies.
 
-ART `0.3.4` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, cloud sync, bundled model, or autonomous publication is required.
+ART `0.3.5` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, cloud sync, bundled model, or autonomous publication is required.
 
 ## Product boundary
 
@@ -54,9 +54,10 @@ does not edit Codex or DSH configuration. The thin Codex plugin lives under
 `codex-primary`. See [operations](docs/operations.md) before migrating or
 publishing knowledge.
 
-ART 0.3.4 exposes the eight canonical source-anchor kinds directly in the MCP
-schema and reports the allowed alternatives for invalid aliases. It retains
-the `art_governance_ui_open` local page, persistent delegated governance,
+ART 0.3.5 turns `art_governance_ui_open` into an exact, accessible proposal
+review workspace with safe rendered Markdown, raw source, locked provenance,
+Edition comparison, conflict-safe decisions, and authoritative publication
+receipts. It retains the eight canonical source-anchor kinds, persistent delegated governance,
 separate Elicitations for compatible clients, restricted-host plugin discovery,
 progressive routing, governed full scan, optional semantic and hybrid adapters,
 deterministic Knowledge Vault backup, encrypted recovery of local review
