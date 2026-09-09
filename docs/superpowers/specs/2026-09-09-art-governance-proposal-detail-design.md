@@ -434,4 +434,3 @@ ART 0.3.5 is ready only when all of the following are true:
    Desktop and DSH.
 8. Test fixtures and runtime residue are removed without altering the user's
    real ART knowledge or governance history.
-
