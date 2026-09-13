@@ -67,6 +67,25 @@ the dedicated private Git repository.
 
 Configuration precedence is `--home`, then `--config <file>`, then the owner-only user config at `~/.across/config/art/config.json`, then the built-in `~/.across` root. The root config accepts only `schema` and `home`. Optional embedding configuration is isolated at `<ART_HOME>/config/art/embedding/default.json`; optional rank fusion policy lives at `<ART_HOME>/config/art/retrieval/fusion.json`; tokens, when needed, live in a separate owner-only file.
 
+## Agent Reliability Toolkit
+
+ART is one independent part of a small, local-first reliability toolkit:
+
+- [Agent Recall Trail](https://github.com/fantasyce/agent-recall-trail) keeps private Agent memory separate from reviewed shared knowledge.
+- [Agent Runtime Proof](https://github.com/fantasyce/agent-runtime-proof) verifies that a live Agent or MCP runtime matches the artifact you approved.
+- [Agent Residue Evidence](https://github.com/fantasyce/agent-residue-evidence) records task-scoped files, processes, and listening ports left by tests and builds.
+
+Each project remains separately installable and keeps its own trust boundary.
+
+## Community feedback
+
+Real Codex and DSH evaluations are especially useful. Share a synthetic or
+redacted workflow in the [design-partner issue](https://github.com/fantasyce/agent-recall-trail/issues/3),
+including the host and ART version, the operation attempted, and the observed
+result. DSH users can also join the
+[official community discussion](https://github.com/deepseek-ai/deepseek-harness/discussions/6479).
+Do not post credentials, private knowledge, or full transcripts.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)

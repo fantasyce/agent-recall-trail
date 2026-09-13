@@ -1,15 +1,26 @@
 # Community launch copy
 
-Status: published to GitHub Discussion #12 on 2026-08-31. GitHub Release, MCP Registry, project site, and the public design-partner call are also live; other account-authenticated community channels remain recorded in the launch manifest.
+Status: the original launch article is published in GitHub Discussion #12. The
+v0.3.5 release, MCP Registry entry, project site, updated design-partner call,
+and DSH official community discussion are live as of 2026-09-13. Other
+account-authenticated community channels remain recorded in the launch
+manifest.
 
 ## Short post
 
-ART v0.3.0 is open source: private Recall Trails for each coding Agent, plus human-reviewed shared Knowledge Editions. It adds progressive route/recall/read and user-selected lexical, full-scan, optional semantic, or hybrid retrieval. Local Rust runtime for Codex + DSH; no bundled model, cloud account, or autonomous publication. https://github.com/fantasyce/agent-recall-trail/releases/tag/v0.3.0
+ART v0.3.5 is open source: private Recall Trails for each coding Agent, plus reviewed shared Knowledge Editions. Its local governance workspace provides exact source and revision review with visible decision and publication states. Human governance is the default; persistent delegated governance is default-off and distinctly labeled when enabled. Local Rust runtime for Codex + DSH; no bundled model or cloud account. https://github.com/fantasyce/agent-recall-trail/releases/tag/v0.3.5
 
 ## Technical community post
 
-We built ART around a hard boundary: memory is private to one Agent; knowledge is an immutable, human-reviewed artifact. It is not a transcript store. ART v0.3.0 adds bounded navigation maps and four retrieval modes behind one API. Lexical remains the stable default; governed full scan needs no model; semantic and hybrid use an optional provider-neutral embedding endpoint and fall back safely. Feedback on retrieval policy, provenance, isolation, recovery, and review semantics is welcome.
+We built ART around a hard boundary: memory is private to one Agent; knowledge
+is an immutable, reviewed artifact. It is not a transcript store. ART v0.3.5
+adds an exact-revision governance workspace, visible request states, immutable
+publication receipts, and persistent default-off delegated governance. Human
+governance remains the default, and delegated actions are recorded as
+`AgentDelegated`, never Human. The same local stdio MCP runtime supports Codex
+and DSH. Feedback on browser compatibility, provenance, isolation, recovery,
+retrieval, and governance semantics is welcome.
 
 ## Chinese community post
 
-ART v0.3.0 正式发布：每个 Agent 继续拥有物理隔离的私有记忆，只有人工审查后的 Knowledge Edition 才能跨 Agent 共享。新版本加入渐进式 route/recall/read，以及可由用户选择的词法、全量扫描、可选语义和混合检索。ART 不捆绑模型；未配置或服务不可用时仍稳定使用词法检索。支持 Codex 与 DSH，本地运行，也不允许 Agent 自主发布知识。
+ART v0.3.5 正式发布：每个 Agent 继续拥有物理隔离的私有记忆，只有经过治理的不可变 Knowledge Edition 才能跨 Agent 共享。新版本加入精确版本审核工作台、清晰的请求与发布状态、不可变发布凭据，以及默认关闭的持久委托治理。人工治理仍是默认模式；启用委托后，动作会明确记录为 `AgentDelegated`，不会冒充人工操作。ART 通过本地 stdio MCP 支持 Codex 与 DSH，不捆绑模型或云账户。
