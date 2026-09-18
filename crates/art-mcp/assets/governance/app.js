@@ -32,6 +32,14 @@ const labels = {
   git_object: "Git 对象",
   test_receipt: "测试收据",
   external_document: "外部文档",
+  host_session_range: "会话范围",
+  user_statement: "用户纠正",
+  command_receipt: "命令收据",
+  log_excerpt: "日志摘录",
+  agent_initiated: "Agent 主动记忆",
+  hook_triggered: "Hook 触发记忆",
+  user_requested: "用户明确要求",
+  legacy_unspecified: "历史来源未知",
 };
 
 function announce(message) {
@@ -118,6 +126,11 @@ function renderProposals() {
 }
 
 function renderAudit() {
+  $("#memory-review-audit").replaceChildren(...(ui.bootstrap.memory_reviews || []).map((entry) => {
+    const item = document.createElement("li");
+    item.textContent = `${entry.memory_id}@${entry.expected_revision} → ${entry.revision} · ${entry.action} · ${entry.actor} · ${entry.reason} · ${entry.reviewed_at}`;
+    return item;
+  }));
   const list = $("#audit-list");
   if (!ui.bootstrap.audit.length) {
     const item = document.createElement("li");
@@ -140,6 +153,206 @@ function renderAudit() {
   }));
 }
 
+function renderAutoMemory() {
+  const value = ui.bootstrap.auto_memory || {};
+  const settings = value.settings || value;
+  const diagnostics = value.diagnostics || {};
+  const toggle = $("#auto-memory-toggle");
+  toggle.checked = settings.enabled === true;
+  toggle.disabled = !value.settings;
+  $("#auto-memory-explanation").textContent = toggle.checked
+    ? "已开启。本机全部 Agent 的主动记忆与 Hook 触发记忆共享开关、预算和价值标准。"
+    : "已关闭。本机全部 Agent 的主动记忆与 Hook 触发记忆均停止；用户明确要求的记忆、召回和人工审核仍可使用。";
+  const list = $("#auto-memory-diagnostics");
+  list.replaceChildren();
+  [
+    ["共享预算上限", `${settings.max_captures_per_session ?? 3} 次 / Agent 会话；无可信会话时按 Agent / 日`],
+    ["最短间隔", `${Math.round((settings.cooldown_seconds ?? 600) / 60)} 分钟`],
+    ["策略版本", settings.policy_version || "—"],
+    ["Codex Hook", diagnostics.last_hook_at ? `${diagnostics.last_hook_outcome} · ${new Date(diagnostics.last_hook_at).toLocaleString()}` : "尚无运行证据"],
+    ["最近捕获", diagnostics.last_capture_at ? `${diagnostics.last_capture_outcome} · ${new Date(diagnostics.last_capture_at).toLocaleString()}` : "尚无捕获记录"],
+    ["待确认", diagnostics.pending_count == null ? "0" : String(diagnostics.pending_count)],
+    ["待确认修订", String(diagnostics.pending_revision_count || 0)],
+    ["触发统计", `准入 ${diagnostics.trigger_summary?.accepted || 0} · 冷却 ${diagnostics.trigger_summary?.cooldown || 0} · 会话上限 ${diagnostics.trigger_summary?.session_limit || 0} · 关闭拦截 ${diagnostics.trigger_summary?.disabled || 0}`],
+    ["录入统计", `生效 ${diagnostics.intake_summary?.activated || 0} · 待审 ${diagnostics.intake_summary?.pending_review || 0} · 重复 ${diagnostics.intake_summary?.duplicate || 0} · 拒绝 ${diagnostics.intake_summary?.rejected || 0} · 限流 ${diagnostics.intake_summary?.rate_limited || 0}`],
+    ["DSH", "支持 Agent 主动记忆和用户明确要求；无 DSH Hook"],
+  ].forEach(([term, content]) => addDefinition(list, term, content));
+  Object.entries(diagnostics.origins || {}).forEach(([origin, value]) => {
+    addDefinition(list, labels[origin] || origin, value.last_disposition || "尚无提交");
+    (value.recent || []).forEach((receipt) => addDefinition(list, receipt.received_at, `${receipt.disposition} · ${receipt.reason} · ${receipt.attribution.degraded ? "归因降级（Agent 声明或缺失）" : "宿主提供归因"}`));
+  });
+  (diagnostics.shared_budget || []).forEach((budget) => addDefinition(list, budget.bucket,
+    `${budget.used}/${settings.max_captures_per_session ?? 3} · ${budget.degraded ? "归因降级，持久 Agent/日预算" : "宿主会话预算"} · 最近准入 ${budget.last_admitted_at || "—"}`));
+}
+
+async function loadMemoryCandidates() {
+  const list = $("#memory-candidate-list");
+  list.setAttribute("aria-busy", "true");
+  try {
+    const payload = await request(`/api/memory-candidates?session=${encodeURIComponent(session || "")}`);
+    renderMemoryCandidates(payload.candidates || [], payload.revision_proposals || []);
+  } catch (error) {
+    list.setAttribute("aria-busy", "false");
+    const message = document.createElement("p");
+    message.className = "notice error";
+    message.textContent = `候选读取失败：${error.message}`;
+    list.replaceChildren(message);
+  }
+}
+
+function candidateField(form, labelText, value, rows = 3) {
+  const label = document.createElement("label");
+  label.textContent = labelText;
+  const input = document.createElement("textarea");
+  input.value = value || "";
+  input.required = true;
+  input.rows = rows;
+  form.append(label, input);
+  return input;
+}
+
+function candidatePayloadEditor(form, payload) {
+  const data = payload.data || {};
+  const list = (value) => (value || []).join("\n");
+  const lines = (input) => input.value.split("\n").map((value) => value.trim()).filter(Boolean);
+  if (payload.kind === "semantic") {
+    const statement = candidateField(form, "记忆内容", data.statement, 4);
+    const applicability = candidateField(form, "适用范围", data.applicability);
+    const exceptions = candidateField(form, "例外（每行一项）", list(data.exceptions));
+    exceptions.required = false;
+    return () => ({ kind: "semantic", data: { statement: statement.value, applicability: applicability.value, exceptions: lines(exceptions) } });
+  }
+  if (payload.kind === "decision") {
+    const decision = candidateField(form, "决定", data.decision, 4);
+    const rationale = candidateField(form, "理由", data.rationale, 4);
+    const alternatives = candidateField(form, "备选方案（每行一项）", list(data.alternatives));
+    const risks = candidateField(form, "已接受风险（每行一项）", list(data.accepted_risks));
+    const revisit = candidateField(form, "重新评估条件", data.revisit_when || "");
+    revisit.required = false;
+    return () => ({ kind: "decision", data: { decision: decision.value, rationale: rationale.value, alternatives: lines(alternatives), accepted_risks: lines(risks), revisit_when: revisit.value.trim() || null } });
+  }
+  if (payload.kind === "episode") {
+    const situation = candidateField(form, "情况", data.situation, 4);
+    const actions = candidateField(form, "采取的行动（每行一项）", list(data.actions));
+    const outcome = candidateField(form, "结果", data.outcome, 4);
+    const questions = candidateField(form, "待确认问题（每行一项）", list(data.open_questions));
+    questions.required = false;
+    return () => ({ kind: "episode", data: { situation: situation.value, actions: lines(actions), outcome: outcome.value, open_questions: lines(questions) } });
+  }
+  const prerequisites = candidateField(form, "前提（每行一项）", list(data.prerequisites));
+  const steps = candidateField(form, "步骤（每行一项）", list(data.steps));
+  const verification = candidateField(form, "验证（每行一项）", list(data.verification));
+  const rollback = candidateField(form, "回退（每行一项）", list(data.rollback));
+  const exclusions = candidateField(form, "不适用情况（每行一项）", list(data.do_not_use_when));
+  return () => ({ kind: "procedure", data: { prerequisites: lines(prerequisites), steps: lines(steps), verification: lines(verification), rollback: lines(rollback), do_not_use_when: lines(exclusions) } });
+}
+
+function renderMemoryCandidates(candidates, proposals = []) {
+  candidates = [...candidates, ...proposals.map((proposal) => ({ ...proposal, origin: proposal.receipt.origin, value_reason: proposal.receipt.value_reason, request_basis: proposal.receipt.request_basis, policy_reason: proposal.receipt.reason, policy_version: proposal.receipt.policy_version }))];
+  const list = $("#memory-candidate-list");
+  $("#candidate-count").textContent = String(candidates.length);
+  list.setAttribute("aria-busy", "false");
+  if (!candidates.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "当前 Agent 没有等待确认的自动记忆候选。";
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...candidates.map((candidate) => {
+    const memory = candidate.artifact;
+    const card = document.createElement("article");
+    card.className = "proposal memory-candidate";
+    const body = document.createElement("div");
+    const title = document.createElement("h3");
+    title.textContent = memory.title;
+    const summary = document.createElement("p");
+    summary.textContent = memory.summary;
+    const meta = document.createElement("p");
+    meta.className = "proposal-meta";
+    meta.textContent = `${candidate.target_memory_id || memory.id}@${candidate.expected_revision || memory.current_revision} · ${labels[candidate.origin] || candidate.origin} · ${candidate.policy_reason} · ${candidate.policy_version}`;
+    const valueReason = document.createElement("p");
+    valueReason.textContent = candidate.value_reason || candidate.request_basis || "历史记录未提供价值理由";
+    const original = document.createElement("details");
+    if (candidate.current_artifact) {
+      const heading = document.createElement("summary");
+      heading.textContent = `当前 Active 内容（版本 ${candidate.current_artifact.current_revision}）；此提案基于版本 ${candidate.expected_revision}`;
+      const content = document.createElement("pre");
+      content.textContent = JSON.stringify({ title: candidate.current_artifact.title, summary: candidate.current_artifact.summary, payload: candidate.current_artifact.payload }, null, 2);
+      original.append(heading, content);
+    }
+    const sources = document.createElement("details");
+    const sourceTitle = document.createElement("summary");
+    sourceTitle.textContent = `查看 ${candidate.anchors.length} 条来源`;
+    const sourceList = document.createElement("ul");
+    candidate.anchors.forEach((anchor) => {
+      const item = document.createElement("li");
+      item.textContent = `${labels[anchor.kind] || anchor.kind} · ${anchor.locator} · ${anchor.observed_at || "—"} · ${JSON.stringify(anchor.metadata || {})}`;
+      sourceList.append(item);
+    });
+    sources.append(sourceTitle, sourceList);
+    const form = document.createElement("form");
+    form.className = "candidate-review-form";
+    const titleLabel = document.createElement("label");
+    titleLabel.textContent = "标题";
+    const titleInput = document.createElement("input");
+    titleInput.value = memory.title;
+    titleInput.required = true;
+    const summaryLabel = document.createElement("label");
+    summaryLabel.textContent = "摘要";
+    const summaryInput = document.createElement("textarea");
+    summaryInput.value = memory.summary;
+    summaryInput.required = true;
+    summaryInput.rows = 3;
+    form.append(titleLabel, titleInput, summaryLabel, summaryInput);
+    const readPayload = candidatePayloadEditor(form, memory.payload);
+    const reasonLabel = document.createElement("label");
+    reasonLabel.textContent = "决定理由";
+    const reason = document.createElement("textarea");
+    reason.required = true;
+    reason.maxLength = 1000;
+    reason.rows = 3;
+    const actions = document.createElement("div");
+    actions.className = "panel-actions";
+    [
+      ["confirm", "确认并启用", "primary"],
+      ["edit_confirm", "修改后确认", ""],
+      ["reject", "拒绝", "danger"],
+    ].forEach(([action, copy, kind]) => {
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.value = action;
+      button.textContent = copy;
+      button.className = `action ${kind}`;
+      button.addEventListener("click", () => { form.dataset.action = action; });
+      actions.append(button);
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      form.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+      const action = form.dataset.action || "confirm";
+      try {
+        await mutate(candidate.proposal_id ? "/api/memory-revision-review" : "/api/memory-candidate-review", {
+          ...(candidate.proposal_id ? { proposal_id: candidate.proposal_id, expected_revision: candidate.expected_revision } : { memory_id: memory.id, revision: memory.current_revision }),
+          action,
+          reason: reason.value,
+          ...(action === "edit_confirm" ? { title: titleInput.value, summary: summaryInput.value, payload: readPayload() } : {}),
+        });
+        announce(action === "reject" ? "候选已拒绝" : "候选已确认并启用");
+        await refresh();
+      } catch (error) {
+        announce(`候选处理失败：${error.message}`);
+        form.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+      }
+    });
+    form.append(reasonLabel, reason, actions);
+    body.append(title, summary, meta, valueReason, original, sources, form);
+    card.append(body);
+    return card;
+  }));
+}
+
 async function refresh() {
   ui.bootstrap = await request(`/api/bootstrap?session=${encodeURIComponent(session || "")}`);
   $("#connection-dot").classList.add("ready");
@@ -149,9 +362,11 @@ async function refresh() {
   $("#policy-explanation").textContent = toggle.checked
     ? "已开启。明确的当前用户指令可由此 Agent 一次完成批准与发布。"
     : "已关闭。提案必须在此页面由人类审核和发布。";
+  renderAutoMemory();
   renderProposals();
   renderAudit();
   setView(ui.bootstrap.view || "pending");
+  if ((ui.bootstrap.view || "pending") === "pending") await loadMemoryCandidates();
   updateSessionClock();
   if (!ui.autoOpened && ui.bootstrap.proposal_id && ui.bootstrap.revision) {
     const proposal = ui.bootstrap.proposals.find((item) => item.proposal_id === ui.bootstrap.proposal_id && item.revision === ui.bootstrap.revision);
@@ -625,6 +840,21 @@ $("#delegation-toggle").addEventListener("change", async (event) => {
   } catch (error) {
     event.target.checked = !event.target.checked;
     announce(error.message);
+  } finally {
+    event.target.disabled = false;
+  }
+});
+
+$("#auto-memory-toggle").addEventListener("change", async (event) => {
+  const enabled = event.target.checked;
+  event.target.disabled = true;
+  try {
+    await mutate("/api/auto-memory", { enabled });
+    announce(enabled ? "本机全局自动记忆已开启" : "本机全局自动记忆已关闭");
+    await refresh();
+  } catch (error) {
+    event.target.checked = !enabled;
+    announce(`自动记忆设置失败：${error.message}`);
   } finally {
     event.target.disabled = false;
   }

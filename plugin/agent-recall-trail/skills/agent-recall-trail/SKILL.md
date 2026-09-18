@@ -31,11 +31,50 @@ null) for its default; zero does not disable a lane. Recall searches both
 private memory and shared knowledge. After a validation error, correct only
 documented parameters before retrying.
 
-Capture only a bounded reusable conclusion with `art_memory_capture`. Choose
+Before capture, read and apply the [private-memory value standard v1](references/private-memory-value-v1.md).
+It is the exact standard also supplied to the Stop Hook continuation.
+Capture only a qualifying conclusion with `art_memory_capture`. Choose
 the matching Episode, Semantic, Procedure, or Decision payload; include safe
 source anchors and scope; omit secrets, full transcripts, unrestricted command
 output, and temporary Recall Bundles. Correct an existing memory with an exact
 expected revision instead of silently creating a contradictory duplicate.
+
+During ordinary work, when a conclusion meets that standard, submit it with
+`capture_origin=agent_initiated` and a bounded `value_reason` describing its
+future use. This proactive path works in Codex and DSH without a Hook.
+Omitted origin also means automatic; it never proves user intent.
+
+When the current user explicitly asks to remember a conclusion, use
+`capture_origin=user_requested` and `request_basis`: a short sanitized
+description of that request, never the full prompt. This is an auditable Agent
+assertion, not host-verified human identity. Explicit requests remain available
+while automatic memory is off and still undergo source and sensitivity checks.
+
+Agent-initiated and Hook-triggered memory share the machine-wide, default-off
+switch, budget, cooldown, and value standard. Read `art_health.auto_memory`
+before proactive submission. Missing, invalid, or disabled configuration means
+no automatic submission or activation. Do not change it through MCP. Only open `art_governance_ui_open` with
+`view=settings` when the user asks to inspect or change the machine-wide
+switch.
+
+Call `art_memory_candidate_submit` only during the single bounded continuation
+created by ART's Stop Hook and only with the exact trigger receipt supplied by
+that continuation. Submit at most candidate index `0`, or submit nothing and
+finish when no durable memory is worthwhile. Never call this tool proactively
+from an ordinary turn, reuse a trigger receipt for different content, read a
+transcript, copy the final response, add authority fields, choose Active, or
+claim human review. The deterministic policy may activate verified,
+non-conflicting content; otherwise it leaves a Candidate for the governance
+page. The global switch is checked again at submission and activation.
+
+Use real source/session/turn references only. MCP session strings are Agent
+assertions; they do not establish trusted host identity. Without a trusted
+session ART uses a persistent Agent/day budget and reports degraded attribution.
+Respect `disabled` and `rate_limited`; do not change keys, origins, or session
+strings to retry around them. Report `pending_review`, `duplicate`, and
+`rejected` accurately; submission alone does not establish Active memory.
+An automatic correction needs `memory_id` and its exact
+`expected_revision`; it produces a pending revision for human review.
 
 Use only the anchor kinds exposed by the tool schema:
 

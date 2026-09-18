@@ -286,9 +286,55 @@ fn version_one_upgrade_backfills_validity_before_serving_searches() {
         .search_ranked_eligible_candidates(&["upgrade marker".into()], 1, false, now)
         .unwrap();
 
-    assert_eq!(upgraded.diagnostics().unwrap().schema_version, 2);
+    assert_eq!(upgraded.diagnostics().unwrap().schema_version, 4);
     assert_eq!(ranked.len(), 1);
     assert_eq!(ranked[0].artifact.id, eligible.id);
+}
+
+#[test]
+fn version_two_upgrade_adds_auto_memory_tables_and_a_preupgrade_copy_recovers() {
+    let root = tempdir().unwrap();
+    let path = root.path().join("art.sqlite3");
+    let backup = root.path().join("art.pre-v3.sqlite3");
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let item = memory(&agent, "explicit capture survives additive migration");
+    {
+        let vault = AgentVault::open(&path, agent.clone()).unwrap();
+        vault
+            .capture(&item, &[anchor(&agent)], "v2-explicit")
+            .unwrap();
+        vault.checkpoint_wal().unwrap();
+    }
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE auto_memory_submission_receipts;
+             DROP TABLE auto_memory_trigger_receipts;
+             DROP TABLE auto_memory_prompt_signals;
+             DROP TABLE auto_memory_hook_runs;
+             UPDATE art_meta SET schema_version=2;",
+            )
+            .unwrap();
+    }
+    fs::copy(&path, &backup).unwrap();
+
+    let upgraded = AgentVault::open(&path, agent.clone()).unwrap();
+    assert_eq!(upgraded.diagnostics().unwrap().schema_version, 4);
+    assert_eq!(upgraded.read(&item.id).unwrap().summary, item.summary);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let tables: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'auto_memory_%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 4);
+
+    let restored = AgentVault::open(&backup, agent).unwrap();
+    assert_eq!(restored.diagnostics().unwrap().schema_version, 4);
+    assert_eq!(restored.read(&item.id).unwrap().summary, item.summary);
 }
 
 #[test]

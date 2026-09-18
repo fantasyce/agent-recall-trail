@@ -13,7 +13,8 @@
   "tools":[
     {"name":"art_recall","description":"Recall private Agent memory and reviewed shared knowledge."},
     {"name":"art_read","description":"Read one authorized memory or Knowledge Edition."},
-    {"name":"art_memory_capture","description":"Capture one bounded conclusion in this Agent's private vault."},
+    {"name":"art_memory_capture","description":"Submit a bounded sourced private memory. Proactive capture uses agent_initiated and value_reason with automatic memory enabled; explicit user_requested capture requires sanitized request_basis and works while automatic memory is off."},
+    {"name":"art_memory_candidate_submit","description":"Submit at most one private-memory candidate from an exact ART Stop Hook trigger receipt. Shares the ordinary Agent value standard, switch and budget; never use without the genuine trigger receipt."},
     {"name":"art_knowledge_propose","description":"Draft a knowledge proposal for later human review."},
     {"name":"art_knowledge_governance","description":"Request human governance or an enabled atomic delegated approval and publication."},
     {"name":"art_governance_ui_open","description":"Open the bound local governance page for settings, review, publication, and audit."},

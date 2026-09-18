@@ -9,6 +9,9 @@ ART protects private Agent experience, source locations and excerpts, knowledge 
 - Physical per-Agent SQLite files and startup identity binding prevent cross-Agent access through ART interfaces.
 - Private files use owner-only permissions; directories use owner-only traversal.
 - MCP exposes no SQL, owner selector, deletion, grant, or cross-Agent tool.
+- MCP can submit an automatic-memory Candidate only with a current trigger
+  receipt bound to its process Agent. It cannot enable automatic memory or
+  choose Active, reviewer, assurance, or human identity fields.
 - The governance page binds only to a random `127.0.0.1` port. Short-lived
   high-entropy session capabilities, exact Origin checks, CSRF tokens, Agent
   binding, host binding, proposal revision binding, and bounded redacted JSON
@@ -17,6 +20,13 @@ ART protects private Agent experience, source locations and excerpts, knowledge 
   identity. It is not inferred from Full Access. Delegated approval and
   publication are recorded as `AgentDelegated`, never Human, with the fixed
   `current_user_instruction` authorization basis.
+- The separate automatic-memory switch is machine-wide, default-off, page-only,
+  and rechecked before trigger, submit, and activation. Prompt hooks persist a
+  correction code rather than prompt text; Stop does not read transcripts.
+- Automatic activation accepts only current bounded file/Git evidence or an
+  on-disk command/test receipt whose bytes, digest, zero exit code, and declared
+  evidence scope agree. Self-attested results, conflicts, and stale sources stay
+  pending for human review.
 - Structured anchors reject common credential forms, private keys, authorization headers, raw transcripts, unsafe receipt shapes, oversized source versions/digests, and forged export hashes.
 - Publication shares keyed commitments and hashes instead of private source identifiers.
 - Paths are canonicalized and constrained; import/export rejects symbolic links, hard links, unsafe content, and existing targets.

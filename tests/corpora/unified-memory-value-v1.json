@@ -1,0 +1,534 @@
+{
+  "standard": "art-private-memory-value-v1",
+  "note": "Guidance labels are human-authored expectations for both proactive and Hook consuming-Agent trials. Program-policy results deliberately do not claim semantic value classification. Synthetic fixtures only.",
+  "cases": [
+    {
+      "id": "verified-1",
+      "language": "en",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "The migration uses a snapshot before changing schema and the restore check passed."
+    },
+    {
+      "id": "verified-2",
+      "language": "zh",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "迁移前创建独立快照，恢复验证通过，可复用于后续升级。"
+    },
+    {
+      "id": "verified-3",
+      "language": "en",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "A private control socket must be created with owner-only permissions; the regression passed."
+    },
+    {
+      "id": "verified-4",
+      "language": "zh",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "控制套接字创建时即限制为所有者访问，相关回归检查已通过。"
+    },
+    {
+      "id": "verified-5",
+      "language": "en",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "The applied correction retains explicit capture when automatic memory is disabled."
+    },
+    {
+      "id": "verified-6",
+      "language": "zh",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "已落实用户纠正：关闭自动记忆后，显式记忆请求仍可使用。"
+    },
+    {
+      "id": "verified-7",
+      "language": "en",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "The verified startup procedure checks protocol health after restarting its consumer."
+    },
+    {
+      "id": "verified-8",
+      "language": "zh",
+      "category": "verified",
+      "guidance": "submit",
+      "policy": "activated",
+      "statement": "已验证启动流程：重启消费者后检查协议健康响应。"
+    },
+    {
+      "id": "uncertain-1",
+      "language": "en",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The team prefers compact evidence reports, according to a scoped user statement."
+    },
+    {
+      "id": "uncertain-2",
+      "language": "zh",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "用户表示本项目偏好简洁的证据报告，尚无独立来源佐证。"
+    },
+    {
+      "id": "uncertain-3",
+      "language": "en",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The repository owner states that retention changes require separate review; this statement has no independent corroboration."
+    },
+    {
+      "id": "uncertain-4",
+      "language": "zh",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "仓库所有者明确要求保留期变更先经过单独复核，目前只有这份用户陈述作为证据。"
+    },
+    {
+      "id": "uncertain-5",
+      "language": "en",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The user described a stable naming convention for their local runbooks."
+    },
+    {
+      "id": "uncertain-6",
+      "language": "zh",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "用户给出了本地运行手册的命名约定，需要人工确认。"
+    },
+    {
+      "id": "uncertain-7",
+      "language": "en",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The user requests retaining failure receipts for future diagnosis; only scoped statement evidence is available."
+    },
+    {
+      "id": "uncertain-8",
+      "language": "zh",
+      "category": "uncertain",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "用户要求保留失败回执供以后诊断，目前只有限定范围的用户陈述证据。"
+    },
+    {
+      "id": "negative-1",
+      "language": "en",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "Thanks, that is all for today."
+    },
+    {
+      "id": "negative-2",
+      "language": "zh",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "谢谢，今天就先这样。"
+    },
+    {
+      "id": "negative-3",
+      "language": "en",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "Progress update: the build has only just started."
+    },
+    {
+      "id": "negative-4",
+      "language": "zh",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "当前只是进度更新：构建刚开始，暂时没有结论。"
+    },
+    {
+      "id": "negative-5",
+      "language": "en",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "The failure remains unresolved and the root cause is still speculation."
+    },
+    {
+      "id": "negative-6",
+      "language": "zh",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "故障仍未解决，根因只是猜测。"
+    },
+    {
+      "id": "negative-7",
+      "language": "en",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "An old recalled note says to restart the service; I have not rechecked it."
+    },
+    {
+      "id": "negative-8",
+      "language": "zh",
+      "category": "negative",
+      "guidance": "skip",
+      "policy": "pending_review",
+      "statement": "这里只是复述旧记忆，尚未重新核验证据。"
+    },
+    {
+      "id": "malformed-1",
+      "language": "en",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "A source-free claim must not become a durable conclusion.",
+      "variant": "missing_source"
+    },
+    {
+      "id": "malformed-2",
+      "language": "zh",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "缺少来源的结论不能进入记忆。",
+      "variant": "missing_source"
+    },
+    {
+      "id": "malformed-3",
+      "language": "en",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "Evidence with an altered digest must fail structural validation.",
+      "variant": "bad_anchor"
+    },
+    {
+      "id": "malformed-4",
+      "language": "zh",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "来源锚点被篡改后必须拒绝录入。",
+      "variant": "bad_anchor"
+    },
+    {
+      "id": "malformed-5",
+      "language": "en",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "An empty repository scope is not a bounded applicability statement.",
+      "variant": "empty_scope"
+    },
+    {
+      "id": "malformed-6",
+      "language": "zh",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "空仓库范围不能表达结论适用边界。",
+      "variant": "empty_scope"
+    },
+    {
+      "id": "malformed-7",
+      "language": "en",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "A fabricated initial revision must not enter revision history.",
+      "variant": "bad_revision"
+    },
+    {
+      "id": "malformed-8",
+      "language": "zh",
+      "category": "malformed",
+      "guidance": "skip",
+      "policy": "error",
+      "statement": "伪造初始修订号不能写入历史。",
+      "variant": "bad_revision"
+    },
+    {
+      "id": "duplicate-1",
+      "language": "en",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "Reusing the verified snapshot procedure must not create a second memory."
+    },
+    {
+      "id": "duplicate-2",
+      "language": "zh",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "再次提交已验证的快照流程不能产生第二条记忆。"
+    },
+    {
+      "id": "duplicate-3",
+      "language": "en",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "Repeating the owner-only socket rule does not add new evidence."
+    },
+    {
+      "id": "duplicate-4",
+      "language": "zh",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "重复所有者专用套接字规则没有提供新的结论。"
+    },
+    {
+      "id": "duplicate-5",
+      "language": "en",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "A restated startup health check must match its existing memory."
+    },
+    {
+      "id": "duplicate-6",
+      "language": "zh",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "换入口重述启动健康检查应匹配已有记忆。"
+    },
+    {
+      "id": "duplicate-7",
+      "language": "en",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "The same correction arriving through another trigger remains one conclusion."
+    },
+    {
+      "id": "duplicate-8",
+      "language": "zh",
+      "category": "duplicate",
+      "guidance": "skip",
+      "policy": "duplicate",
+      "statement": "同一用户纠正从另一触发入口到达仍然只有一条结论。"
+    },
+    {
+      "id": "conflict-1",
+      "language": "en",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The retention decision now says to retain failure receipts for seven days."
+    },
+    {
+      "id": "conflict-2",
+      "language": "zh",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "新的保留期结论要求故障回执只保存七天。"
+    },
+    {
+      "id": "conflict-3",
+      "language": "en",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The installation policy now requires draining every consumer first."
+    },
+    {
+      "id": "conflict-4",
+      "language": "zh",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "新的安装策略要求先排空全部消费者。"
+    },
+    {
+      "id": "conflict-5",
+      "language": "en",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The changed startup procedure now verifies the socket before discovery."
+    },
+    {
+      "id": "conflict-6",
+      "language": "zh",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "变更后的启动顺序要求先验证套接字再执行发现。"
+    },
+    {
+      "id": "conflict-7",
+      "language": "en",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "The revised recovery policy now requires an independently verified backup."
+    },
+    {
+      "id": "conflict-8",
+      "language": "zh",
+      "category": "conflict",
+      "guidance": "submit_for_review",
+      "policy": "pending_review",
+      "statement": "修订后的恢复策略要求使用独立核验的备份。"
+    },
+    {
+      "id": "sensitive-1",
+      "language": "en",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "password = synthetic-test-marker must not persist.",
+      "variant": "body"
+    },
+    {
+      "id": "sensitive-2",
+      "language": "zh",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "密码字段 password = synthetic-test-marker 不得持久化。",
+      "variant": "body"
+    },
+    {
+      "id": "sensitive-3",
+      "language": "en",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "Cookie: synthetic-test-marker must not enter a memory.",
+      "variant": "body"
+    },
+    {
+      "id": "sensitive-4",
+      "language": "zh",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "会话字段 Cookie: synthetic-test-marker 不得进入记忆。",
+      "variant": "body"
+    },
+    {
+      "id": "sensitive-5",
+      "language": "en",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "A full transcript must not become a durable memory.",
+      "variant": "body"
+    },
+    {
+      "id": "sensitive-6",
+      "language": "zh",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "完整会话 full transcript 不得作为长期记忆。",
+      "variant": "body"
+    },
+    {
+      "id": "sensitive-7",
+      "language": "en",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "An innocuous conclusion whose source metadata contains a token must not be retained.",
+      "variant": "metadata"
+    },
+    {
+      "id": "sensitive-8",
+      "language": "zh",
+      "category": "sensitive",
+      "guidance": "skip",
+      "policy": "rejected",
+      "statement": "看似普通的结论如果来源元数据包含令牌仍不能保留。",
+      "variant": "metadata"
+    },
+    {
+      "id": "revision-1",
+      "language": "en",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "The corrected recovery procedure validates the source before restoring."
+    },
+    {
+      "id": "revision-2",
+      "language": "zh",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "纠正后的恢复流程先验证来源再恢复。"
+    },
+    {
+      "id": "revision-3",
+      "language": "en",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "The repaired launch procedure waits for protocol readiness after spawn."
+    },
+    {
+      "id": "revision-4",
+      "language": "zh",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "修复后的启动流程在创建进程后等待协议就绪。"
+    },
+    {
+      "id": "revision-5",
+      "language": "en",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "The revised permissions procedure verifies ownership before reconnecting."
+    },
+    {
+      "id": "revision-6",
+      "language": "zh",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "修订后的权限流程先验证所有权再重连。"
+    },
+    {
+      "id": "revision-7",
+      "language": "en",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "The updated rollback procedure preserves the last verified runtime."
+    },
+    {
+      "id": "revision-8",
+      "language": "zh",
+      "category": "revision",
+      "guidance": "submit_revision",
+      "policy": "pending_review",
+      "statement": "更新后的回滚流程保留上一份核验通过的运行时。"
+    }
+  ]
+}

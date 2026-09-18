@@ -7,6 +7,7 @@ use std::{
 };
 
 use art_agent_store::AgentVault;
+use art_cli::run_auto_memory_hook;
 use art_domain::{
     ArtError, ArtResult,
     agent::{AgentId, AgentProfile, ArtPaths, HostKind},
@@ -149,6 +150,18 @@ enum Command {
         navigation: bool,
         #[arg(long)]
         vectors: bool,
+    },
+    AutoMemory {
+        #[command(subcommand)]
+        command: AutoMemoryCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AutoMemoryCommand {
+    Hook {
+        #[arg(long)]
+        agent: String,
     },
 }
 
@@ -634,6 +647,24 @@ async fn run(cli: Cli) -> ArtResult<()> {
             print_json(
                 &json!({"schema":"art.cli.v1","reindexed":true,"private_memories":private_memories,"private_navigation":private_navigation,"private_vectors":private_vectors,"knowledge":knowledge,"knowledge_editions":knowledge_editions,"knowledge_navigation":knowledge_navigation,"knowledge_vectors":knowledge_vectors,"provider_fingerprint":provider_fingerprint}),
             )
+        }
+        Command::AutoMemory {
+            command: AutoMemoryCommand::Hook { agent },
+        } => {
+            let output = agent
+                .parse::<AgentId>()
+                .ok()
+                .zip(serde_json::from_reader(std::io::stdin()).ok())
+                .and_then(|(agent_id, input)| {
+                    run_auto_memory_hook(&paths, agent_id, input).ok()
+                })
+                .unwrap_or_else(|| {
+                    json!({
+                        "continue": true,
+                        "systemMessage": "ART automatic memory failed safely; no automatic memory was written."
+                    })
+                });
+            print_json(&output)
         }
     }
 }

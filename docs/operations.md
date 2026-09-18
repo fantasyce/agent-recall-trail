@@ -85,6 +85,29 @@ semantic path with a safe diagnostic; it never silently changes ranking.
    receipts. Full Access alone never enables delegation.
 6. Human verifies or revokes an Edition. Existing Edition files remain immutable.
 
+## Selective automatic memory
+
+Open `art_governance_ui_open` with the Settings view and use **Global automatic
+memory** to opt in. This is one machine-wide setting for every local Agent and
+is separate from delegated shared-knowledge governance. It defaults and fails
+closed to off, persists across restart, and can be changed only in the
+authenticated local page.
+
+When enabled, the Codex plugin records only a bounded correction signal at
+prompt submission. At Stop it uses local rules to admit explicit decisions,
+applied corrections, and verified repairs. A session can be admitted at most
+three times with at least ten minutes between admissions. An admitted turn gets
+one continuation in the current Agent to submit at most one structured private
+Candidate. ART does not parse a transcript or start a separate model. Hook
+failure never blocks the user's task.
+
+ART rechecks the setting during submission and immediately before policy
+activation. Disabling it stops new automatic writes; enabling it later does not
+backfill disabled-period turns or accept a trigger from an older configuration
+version. Existing memory, recall, explicit capture, and human review continue
+to work while it is off. Pending candidates are reviewed from the Pending view,
+where the user can confirm, edit-confirm, or reject them.
+
 ## Import and export
 
 `art import markdown --source <path> --dry-run` emits deterministic Knowledge Import Proposals with source path/hash, title, permalink, wiki links, eligibility, and warnings for missing titles, duplicate permalinks, dangling links, or secret-like content. A write requires both `--copy-to <new-path>` and `--confirm`; blocked findings prevent copying. The destination must not exist, must be outside the source, and symbolic/hard links are rejected. Only Markdown is copied with private permissions. The source is never edited.

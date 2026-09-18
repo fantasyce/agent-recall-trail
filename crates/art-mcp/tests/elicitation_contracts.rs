@@ -16,6 +16,7 @@ use rmcp::{
     service::RequestContext,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 #[derive(Clone)]
@@ -221,24 +222,31 @@ impl Harness {
     }
 
     async fn proposal(&self) -> (String, u32) {
-        let memory = self.call("art_memory_capture", json!({
-            "title":"Elicitation fixture",
-            "summary":"A bounded source for protocol tests.",
-            "payload": {"kind":"semantic","data":{
-                "statement":"The elicitation fixture is valid.",
-                "applicability":"ART protocol tests",
-                "confidence":"high",
-                "evidence_summary":"A local deterministic test fixture.",
-                "revisit_when":null
-            }},
-            "scope_type":"repository",
-            "scope_key":"agent-recall-trail",
-            "sensitivity":"internal",
-            "idempotency_key":"elicitation-memory",
-            "anchors":[{"kind":"test_receipt","locator":"test://elicitation","source_version":"1","source_digest":null,"excerpt":"fixture","metadata":{}}],
-            "unanchored_candidate":false,
-            "no_persist_provenance":false
-        })).await;
+        let memory = self
+            .call(
+                "art_memory_capture",
+                json!({
+                    "capture_origin":"user_requested",
+                    "request_basis":"User asked to retain the verified protocol fixture",
+                    "title":"Elicitation fixture",
+                    "summary":"A bounded source for protocol tests.",
+                    "payload": {"kind":"semantic","data":{
+                        "statement":"The elicitation fixture is valid.",
+                        "applicability":"ART protocol tests",
+                        "confidence":"high",
+                        "evidence_summary":"A local deterministic test fixture.",
+                        "revisit_when":null
+                    }},
+                    "scope_type":"repository",
+                    "scope_key":"agent-recall-trail",
+                    "sensitivity":"internal",
+                    "idempotency_key":"elicitation-memory",
+                    "anchors":[self.verified_anchor()],
+                    "unanchored_candidate":false,
+                    "no_persist_provenance":false
+                }),
+            )
+            .await;
         let source = format!(
             "memory:{}@{}",
             memory["memory_id"].as_str().unwrap(),
@@ -343,6 +351,8 @@ impl Harness {
             .call(
                 "art_memory_capture",
                 json!({
+                    "capture_origin":"user_requested",
+                    "request_basis":"User asked to update the verified protocol fixture",
                     "memory_id":memory_id,
                     "expected_revision":revision,
                     "title":"Revised elicitation fixture",
@@ -358,13 +368,19 @@ impl Harness {
                     "scope_key":"agent-recall-trail",
                     "sensitivity":"internal",
                     "idempotency_key":"elicitation-memory-revision",
-                    "anchors":[{"kind":"test_receipt","locator":"test://elicitation-revised","source_version":"2","source_digest":null,"excerpt":"revised fixture","metadata":{}}],
+                    "anchors":[self.verified_anchor()],
                     "unanchored_candidate":false,
                     "no_persist_provenance":false
                 }),
             )
             .await;
         assert_eq!(revised["revision"], revision + 1);
+    }
+
+    fn verified_anchor(&self) -> Value {
+        let path = self.root.path().join("elicitation-evidence.txt");
+        std::fs::write(&path, b"verified elicitation fixture").unwrap();
+        json!({"kind":"file_snapshot","locator":path,"source_version":"1","source_digest":hex::encode(Sha256::digest(b"verified elicitation fixture")),"metadata":{}})
     }
 }
 

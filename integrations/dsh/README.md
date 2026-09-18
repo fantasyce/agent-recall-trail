@@ -17,3 +17,18 @@ review, publication, status, and audit. Delegation is default-off and bound to
 the local host plus Agent identity; when enabled, one unambiguous request uses
 `approve_and_publish` and records `AgentDelegated`. Do not route people to a
 shell workflow.
+
+DSH supports proactive private memory without a DSH Hook. Ordinary work uses
+`mcp__art__art_memory_capture` with `capture_origin=agent_initiated` and a
+`value_reason`. This shares the machine-wide automatic switch, budget and
+cooldown with Codex Hook intake. The persistent Agent/day fallback applies
+without trusted host session attribution. The value standard is
+[private-memory value standard v1](../../plugin/agent-recall-trail/skills/agent-recall-trail/references/private-memory-value-v1.md).
+
+Explicit user requests use `capture_origin=user_requested` and a sanitized
+`request_basis`; these and recall remain available when automatic memory is
+off. The same nine tools apply. DSH must not emulate the Codex Stop Hook or use
+`art_memory_candidate_submit` without its genuine trigger receipt. Keep the
+value-standard reference available with the integration skill when packaging
+it separately. Live proactive/explicit DSH acceptance for this candidate is
+reported separately from the historical host validation above.

@@ -12,12 +12,18 @@ import sys
 root = pathlib.Path(sys.argv[1])
 manifest = json.loads((root / ".codex-plugin/plugin.json").read_text())
 assert manifest["name"] == "agent-recall-trail"
-assert manifest["version"] == "0.3.5"
+assert manifest["version"] == "0.3.6"
 assert manifest["skills"] == "./skills/"
 assert manifest["mcpServers"] == "./.mcp.json"
 assert manifest["interface"]["displayName"] == "Agent Recall Trail"
 mcp = json.loads((root / ".mcp.json").read_text())["mcpServers"]["agent-recall-trail"]
 assert mcp["args"][1:] == ["mcp", "serve", "--agent", "codex-primary"]
+hooks = json.loads((root / "hooks/hooks.json").read_text())["hooks"]
+assert set(hooks) == {"UserPromptSubmit", "Stop"}
+for event in hooks.values():
+    command = event[0]["hooks"][0]["command"]
+    assert "$PLUGIN_ROOT/scripts/launch-mcp.sh" in command
+    assert "auto-memory hook --agent codex-primary" in command
 skill = (root / "skills/agent-recall-trail/SKILL.md").read_text()
 assert skill.startswith("---\nname: agent-recall-trail\n")
 assert "Basic Memory" not in skill
@@ -61,11 +67,12 @@ for integration in [
 policy = (root / "skills/agent-recall-trail/agents/openai.yaml").read_text()
 assert "allow_implicit_invocation: true" in policy
 bundle_manifest = json.loads((root.parents[1] / "packaging/mcpb/manifest.json.in").read_text())
-assert len(bundle_manifest["tools"]) == 8
+assert len(bundle_manifest["tools"]) == 9
+assert "art_memory_candidate_submit" in {tool["name"] for tool in bundle_manifest["tools"]}
 assert "art_knowledge_governance" in {tool["name"] for tool in bundle_manifest["tools"]}
 assert "art_governance_ui_open" in {tool["name"] for tool in bundle_manifest["tools"]}
 PY
 
 python3 "$repo_root/tests/scripts/test_plugin_launch.py"
-cargo test -p art-mcp --test mcp_contracts tool_surface_is_exactly_eight_agent_safe_tools
+cargo test -p art-mcp --test mcp_contracts tool_surface_is_exactly_nine_agent_safe_tools
 echo 'plugin surface contract passed'

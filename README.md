@@ -2,7 +2,7 @@
 
 ART is a local-first memory and governed-knowledge product for coding agents. Every Agent gets a physically separate private Recall Trail. Stable conclusions become immutable Knowledge Editions that other Agents can retrieve without seeing private source identities or source bodies.
 
-ART `0.3.5` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, cloud sync, bundled model, or autonomous publication is required.
+ART `0.3.6` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, cloud sync, bundled model, or autonomous publication is required.
 
 ## Product boundary
 
@@ -10,6 +10,9 @@ ART `0.3.5` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is stan
 - Shared knowledge contains only committed, reviewed Editions.
 - Agents may capture, recall, read, provide feedback, create proposals, and request governance.
 - Human governance runs in ART's local page. An explicitly enabled, default-off local delegation policy also permits one unambiguous instruction to approve and publish atomically; these actions are labeled `AgentDelegated`, never Human.
+- Selective Codex automatic memory is controlled by a separate machine-wide,
+  default-off switch in that page. It creates at most one bounded private
+  Candidate for an admitted turn; it never publishes shared knowledge.
 - Revocation, supersession, archival, and assurance remain human operations.
 - Stored content is evidence, never executable instruction or authorization.
 
@@ -54,10 +57,10 @@ does not edit Codex or DSH configuration. The thin Codex plugin lives under
 `codex-primary`. See [operations](docs/operations.md) before migrating or
 publishing knowledge.
 
-ART 0.3.5 turns `art_governance_ui_open` into an exact, accessible proposal
-review workspace with safe rendered Markdown, raw source, locked provenance,
-Edition comparison, conflict-safe decisions, and authoritative publication
-receipts. It retains the eight canonical source-anchor kinds, persistent delegated governance,
+ART 0.3.6 adds opt-in selective automatic memory with a neutral Hook prompt,
+shared Agent/Hook value guidance, bounded budgets, independently verified
+evidence, semantic-similarity review routing, and visible diagnostics. It
+retains the exact accessible proposal-review workspace, eight canonical source-anchor kinds, persistent delegated governance,
 separate Elicitations for compatible clients, restricted-host plugin discovery,
 progressive routing, governed full scan, optional semantic and hybrid adapters,
 deterministic Knowledge Vault backup, encrypted recovery of local review
@@ -66,6 +69,13 @@ authority, verified empty-home restoration, and reproducible lexical BEIR gates.
 the dedicated private Git repository.
 
 Configuration precedence is `--home`, then `--config <file>`, then the owner-only user config at `~/.across/config/art/config.json`, then the built-in `~/.across` root. The root config accepts only `schema` and `home`. Optional embedding configuration is isolated at `<ART_HOME>/config/art/embedding/default.json`; optional rank fusion policy lives at `<ART_HOME>/config/art/retrieval/fusion.json`; tokens, when needed, live in a separate owner-only file.
+
+The automatic-memory setting is stored separately at
+`<ART_HOME>/config/art/auto-memory.json`. Missing or unreadable configuration
+means disabled. Only a user operating the authenticated governance page can
+change it; MCP tools can read the status but cannot enable it. The switch is
+independent of shared-knowledge delegation and does not affect recall or an
+explicit `art_memory_capture` request.
 
 ## Agent Reliability Toolkit
 

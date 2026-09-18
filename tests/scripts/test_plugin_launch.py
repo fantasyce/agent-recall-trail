@@ -145,7 +145,7 @@ class PluginLaunchTests(unittest.TestCase):
             self.assertEqual(names, {
                 "art_feedback", "art_governance_ui_open", "art_health",
                 "art_knowledge_governance", "art_knowledge_propose",
-                "art_memory_capture", "art_read", "art_recall",
+                "art_memory_candidate_submit", "art_memory_capture", "art_read", "art_recall",
             })
             # A skill naming an unavailable operation is a broken consumer contract.
             references = set(re.findall(r"`(art_[a-z_]+)`", (PLUGIN / "skills/agent-recall-trail/SKILL.md").read_text()))
@@ -173,6 +173,8 @@ class PluginLaunchTests(unittest.TestCase):
                 "scope_key": "agent-recall-trail",
                 "sensitivity": "private",
                 "idempotency_key": "packaged-anchor-contract",
+                "capture_origin": "user_requested",
+                "request_basis": "User requested this bounded packaged-anchor conclusion.",
                 "anchors": [
                     {"kind": "git_object", "locator": "commit:920cf0c"},
                     {"kind": "external_document", "locator": "https://example.test/art-anchor-contract"},
@@ -182,6 +184,9 @@ class PluginLaunchTests(unittest.TestCase):
                 "name": "art_memory_capture", "arguments": capture_arguments,
             })
             self.assertFalse(captured.get("isError", False), captured)
+            self.assertEqual(captured["structuredContent"]["origin"], "user_requested")
+            # These canonical anchors have no independently verifiable source.
+            self.assertEqual(captured["structuredContent"]["disposition"], "pending_review")
             replay = self.request(process, 5, "tools/call", {
                 "name": "art_memory_capture", "arguments": capture_arguments,
             })
@@ -189,6 +194,7 @@ class PluginLaunchTests(unittest.TestCase):
                 captured["structuredContent"]["memory_id"],
                 replay["structuredContent"]["memory_id"],
             )
+            self.assertTrue(replay["structuredContent"]["replayed"])
             for identifier, alias in [(6, "git"), (7, "url")]:
                 invalid = dict(capture_arguments)
                 invalid["title"] = f"invalid-alias-{alias}-must-not-persist"
