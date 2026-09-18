@@ -29,6 +29,31 @@ Use the configured `art_*` MCP tools as the only interface to ART memory and kno
 ## Capture and knowledge
 
 - Capture only reusable, non-obvious experience with a typed payload, narrow scope, sensitivity, idempotency key, and verifiable source anchor.
+- Read and apply [private-memory value standard v1](../../../plugin/agent-recall-trail/skills/agent-recall-trail/references/private-memory-value-v1.md), the same versioned standard embedded in the Hook continuation.
+- During ordinary work, proactively submit a qualifying conclusion through
+  `art_memory_capture` with `capture_origin=agent_initiated` and `value_reason`
+  explaining future use. A Hook is not required. Check `art_health.auto_memory`
+  first; missing, invalid, or disabled settings prohibit automatic submission.
+- For a current explicit request to remember, set `capture_origin=user_requested`
+  and a short sanitized `request_basis`, not the full user prompt. It remains
+  subject to source/sensitivity checks and works while automatic memory is off.
+- Selective automatic memory is controlled by the machine-wide, default-off
+  setting reported by `art_health.auto_memory`. Never change it with MCP; when
+  the user asks, open `art_governance_ui_open(view=settings)` for the human.
+- Use `art_memory_candidate_submit` only in the one continuation created by
+  ART's Stop Hook, with its exact trigger receipt and candidate index `0`.
+  Return no candidate when nothing is worth recording. Never parse the
+  transcript, copy the final response, specify a status/actor, or retry with
+  different content under the same receipt. Ordinary explicit memory requests
+  continue to use `art_memory_capture`, including while automatic memory is
+  off.
+- Both automatic origins share admission limits and cooldown. Omitted origin
+  means `agent_initiated`. Session/turn strings supplied through MCP remain
+  Agent assertions; absent trusted identity uses the persistent Agent/day
+  fallback. Do not invent references or change keys to bypass `disabled` or
+  `rate_limited`. Report the actual disposition; `pending_review` is not Active.
+- Automatic correction uses `memory_id` and exact `expected_revision`
+  and leaves a pending proposal; the Active revision changes only after review.
 - Select the anchor kind exactly from `host_session_range`, `user_statement`,
   `file_snapshot`, `git_object`, `command_receipt`, `test_receipt`,
   `log_excerpt`, or `external_document`. Use session/user/file/Git kinds for

@@ -4,10 +4,12 @@ use std::{
     time::Duration,
 };
 
+use art_agent_store::{AgentVault, AutoMemoryConfigStore};
 use art_domain::{
     ArtError, ArtResult,
     agent::AgentId,
     knowledge::{ProposalStatus, ReviewActor, RiskLevel},
+    memory::{MemoryPayload, MemoryStatus},
 };
 use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use axum::{
@@ -74,6 +76,8 @@ struct AppState {
     host_binding_hash: String,
     sessions: Arc<std::sync::RwLock<BTreeMap<String, StoredSession>>>,
     origin: Arc<std::sync::RwLock<Option<String>>>,
+    auto_memory_config: Option<AutoMemoryConfigStore>,
+    private_vault: Option<AgentVault>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,9 +96,22 @@ impl GovernanceUiManager {
                 host_binding_hash,
                 sessions: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
                 origin: Arc::new(std::sync::RwLock::new(None)),
+                auto_memory_config: None,
+                private_vault: None,
             },
             server: Arc::new(Mutex::new(None)),
         }
+    }
+
+    #[must_use]
+    pub fn with_auto_memory(
+        mut self,
+        config: AutoMemoryConfigStore,
+        private_vault: AgentVault,
+    ) -> Self {
+        self.state.auto_memory_config = Some(config);
+        self.state.private_vault = Some(private_vault);
+        self
     }
 
     pub async fn open_session(
@@ -194,6 +211,16 @@ fn router(state: AppState) -> Router {
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/proposal-detail", get(proposal_detail))
         .route("/api/delegation", post(update_delegation))
+        .route(
+            "/api/auto-memory",
+            get(auto_memory).post(update_auto_memory),
+        )
+        .route("/api/memory-candidates", get(memory_candidates))
+        .route("/api/memory-revision-review", post(review_memory_revision))
+        .route(
+            "/api/memory-candidate-review",
+            post(review_memory_candidate),
+        )
         .route("/api/review", post(review))
         .route("/api/publish", post(publish))
         .with_state(state)
@@ -250,6 +277,21 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
         Ok(mode) => mode,
         Err(error) => return internal_error_response(&error),
     };
+    let auto_memory = state.auto_memory_config.as_ref().map_or_else(
+        || json!({"enabled":false,"configured":false,"reason":"host_not_configured"}),
+        |config| {
+            let diagnostics = state
+                .private_vault
+                .as_ref()
+                .and_then(|vault| vault.auto_memory_diagnostics().ok());
+            json!({
+                "settings":config.status(),
+                "diagnostics":diagnostics,
+                "automatic_origins":["agent_initiated","hook_triggered"],
+                "host_support":automatic_host_support()
+            })
+        },
+    );
     let all_proposals = match state.vault.list_proposals() {
         Ok(proposals) => proposals,
         Err(error) => return internal_error_response(&error),
@@ -297,8 +339,22 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
             }
         }
     }
+    let memory_reviews = if session.view == UiView::Audit {
+        match state
+            .private_vault
+            .as_ref()
+            .map(AgentVault::memory_revision_reviews)
+            .transpose()
+        {
+            Ok(reviews) => reviews.unwrap_or_default(),
+            Err(error) => return art_error_response(&error),
+        }
+    } else {
+        Vec::new()
+    };
     Json(json!({
         "schema": "art.governance.ui.v1",
+        "memory_reviews": memory_reviews,
         "view": session.view,
         "proposal_id": session.proposal_id,
         "revision": session.revision,
@@ -307,11 +363,250 @@ async fn bootstrap(State(state): State<AppState>, Query(query): Query<SessionQue
         "bound_agent_id": state.agent_id.as_str(),
         "host_binding": &state.host_binding_hash[..12],
         "governance_mode": mode,
+        "auto_memory": auto_memory,
         "actionable_count": proposals.len(),
         "proposals": proposals,
         "audit": audit.into_iter().rev().take(100).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+async fn auto_memory(State(state): State<AppState>, Query(query): Query<SessionQuery>) -> Response {
+    let session = match authorized_session(&state, &query.session) {
+        Ok(session) => session,
+        Err(status) => return status.into_response(),
+    };
+    if session.view != UiView::Settings {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(config) = state.auto_memory_config.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let diagnostics = state
+        .private_vault
+        .as_ref()
+        .and_then(|vault| vault.auto_memory_diagnostics().ok());
+    Json(json!({
+        "schema":"art.auto-memory.settings.v1",
+        "settings":config.status(),
+        "diagnostics":diagnostics,
+        "automatic_origins":["agent_initiated","hook_triggered"],
+        "host_support":automatic_host_support(),
+    }))
+    .into_response()
+}
+
+fn automatic_host_support() -> serde_json::Value {
+    json!({"codex":{"agent_initiated":true,"hook_triggered":true},"dsh":{"agent_initiated":true,"hook_triggered":false}})
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoMemoryUpdateRequest {
+    session: String,
+    enabled: bool,
+}
+
+async fn update_auto_memory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AutoMemoryUpdateRequest>,
+) -> Response {
+    if let Err(response) =
+        authorized_mutation(&state, &headers, &request.session, UiView::Settings, None)
+    {
+        return response.into_response();
+    }
+    let Some(config) = state.auto_memory_config.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match config.set_enabled(request.enabled, "human:local-governance-ui") {
+        Ok(settings) => Json(json!({
+            "schema":"art.auto-memory.settings-receipt.v1",
+            "ok":true,
+            "settings":settings,
+            "audit_actor":"human:local-governance-ui",
+        }))
+        .into_response(),
+        Err(error) => art_error_response(&error),
+    }
+}
+
+async fn memory_candidates(
+    State(state): State<AppState>,
+    Query(query): Query<SessionQuery>,
+) -> Response {
+    let session = match authorized_session(&state, &query.session) {
+        Ok(session) => session,
+        Err(status) => return status.into_response(),
+    };
+    if session.view != UiView::Pending {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(vault) = state.private_vault.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let proposals = match vault.pending_revision_proposals().and_then(|proposals| {
+        proposals
+            .into_iter()
+            .map(|proposal| {
+                let current = vault.read(&proposal.target_memory_id)?;
+                let mut value = serde_json::to_value(proposal)
+                    .map_err(|e| ArtError::Internal(e.to_string()))?;
+                value["current_artifact"] = json!(current);
+                Ok(value)
+            })
+            .collect::<ArtResult<Vec<_>>>()
+    }) {
+        Ok(proposals) => proposals,
+        Err(error) => return art_error_response(&error),
+    };
+    match vault.auto_memory_candidates() {
+        Ok(candidates) => Json(json!({
+            "schema":"art.auto-memory.candidates.v1",
+            "bound_agent_id":state.agent_id.as_str(),
+            "candidates":candidates,
+            "revision_proposals":proposals,
+        }))
+        .into_response(),
+        Err(error) => art_error_response(&error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryRevisionReviewRequest {
+    session: String,
+    proposal_id: String,
+    expected_revision: u32,
+    action: art_agent_store::MemoryReviewAction,
+    reason: String,
+    title: Option<String>,
+    summary: Option<String>,
+    payload: Option<MemoryPayload>,
+}
+
+async fn review_memory_revision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<MemoryRevisionReviewRequest>,
+) -> Response {
+    if let Err(response) =
+        authorized_mutation(&state, &headers, &request.session, UiView::Pending, None)
+    {
+        return response.into_response();
+    }
+    let Some(vault) = state.private_vault.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let review = art_agent_store::MemoryRevisionReview {
+        proposal_id: request.proposal_id,
+        expected_revision: request.expected_revision,
+        action: request.action,
+        reason: request.reason,
+        title: request.title,
+        summary: request.summary,
+        payload: request.payload,
+    };
+    match vault.review_memory_revision(review, "human:local-governance-ui") {
+        Ok(receipt) => Json(receipt).into_response(),
+        Err(error) => art_error_response(&error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MemoryCandidateAction {
+    Confirm,
+    EditConfirm,
+    Reject,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryCandidateReviewRequest {
+    session: String,
+    memory_id: String,
+    revision: u32,
+    action: MemoryCandidateAction,
+    reason: String,
+    title: Option<String>,
+    summary: Option<String>,
+    payload: Option<MemoryPayload>,
+}
+
+async fn review_memory_candidate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<MemoryCandidateReviewRequest>,
+) -> Response {
+    if let Err(response) =
+        authorized_mutation(&state, &headers, &request.session, UiView::Pending, None)
+    {
+        return response.into_response();
+    }
+    if request.reason.trim().is_empty() || request.reason.trim().len() > 1_000 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(vault) = state.private_vault.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let current = match vault.read(&request.memory_id) {
+        Ok(memory) => memory,
+        Err(error) => return art_error_response(&error),
+    };
+    if current.current_revision != request.revision || current.status != MemoryStatus::Candidate {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let result = match request.action {
+        MemoryCandidateAction::Confirm => vault
+            .assure(
+                &request.memory_id,
+                request.revision,
+                art_domain::anchor::AssuranceOutcome::Corroborated,
+                "human:local-governance-ui",
+                request.reason.trim(),
+            )
+            .and_then(|_| vault.read(&request.memory_id)),
+        MemoryCandidateAction::Reject => vault
+            .assure(
+                &request.memory_id,
+                request.revision,
+                art_domain::anchor::AssuranceOutcome::Invalidated,
+                "human:local-governance-ui",
+                request.reason.trim(),
+            )
+            .and_then(|_| vault.read(&request.memory_id)),
+        MemoryCandidateAction::EditConfirm => {
+            match (request.title, request.summary, request.payload) {
+                (Some(title), Some(summary), Some(payload)) => vault
+                    .edit_and_confirm_auto_candidate(
+                        &request.memory_id,
+                        request.revision,
+                        &title,
+                        &summary,
+                        payload,
+                        "human:local-governance-ui",
+                        request.reason.trim(),
+                    ),
+                _ => Err(ArtError::InvalidInput(
+                    "edit_confirm requires title, summary, and payload".into(),
+                )),
+            }
+        }
+    };
+    match result {
+        Ok(memory) => Json(json!({
+            "schema":"art.auto-memory.review-receipt.v1",
+            "ok":true,
+            "memory_id":memory.id,
+            "revision":memory.current_revision,
+            "status":memory.status,
+            "actor":"human:local-governance-ui",
+        }))
+        .into_response(),
+        Err(error) => art_error_response(&error),
+    }
 }
 
 fn is_actionable(proposal: &art_domain::knowledge::KnowledgeProposal) -> bool {
@@ -751,6 +1046,8 @@ mod tests {
                 },
             )]))),
             origin: Arc::new(std::sync::RwLock::new(Some("http://127.0.0.1:1".into()))),
+            auto_memory_config: None,
+            private_vault: None,
         };
 
         assert_eq!(

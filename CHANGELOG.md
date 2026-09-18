@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.6 - 2026-09-18
+
+- Added a default-off, machine-wide selective automatic-memory switch that is
+  writable only through the authenticated local governance page.
+- Added bounded Codex `UserPromptSubmit` and `Stop` hooks, durable trigger and
+  submission receipts, session limits, cooldowns, and fail-open host behavior.
+- Added `art_memory_candidate_submit`; automatic content remains Candidate
+  unless current file, Git, or execution-receipt evidence can be independently
+  verified and no possible conflict exists.
+- Added bound-Agent candidate review, edit-confirm, reject, diagnostics, and
+  DSH manual-workflow compatibility coverage.
+- Made the Hook value prompt explicitly neutral and required a bounded recall
+  check before submission.
+- Added a backend same-scope similarity gate that routes likely paraphrases or
+  conflicts to human review instead of automatic activation.
+
 ## 0.3.5 - 2026-09-09
 
 - Replaced queue shortcuts with an exact proposal-detail review workspace for

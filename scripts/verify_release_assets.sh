@@ -24,7 +24,7 @@ with zipfile.ZipFile(d/f'agent-recall-trail_{v}.mcpb') as a:
  assert {tool['name'] for tool in m['tools']} == {
   'art_recall', 'art_read', 'art_memory_capture', 'art_knowledge_propose',
   'art_knowledge_governance', 'art_governance_ui_open', 'art_feedback',
-  'art_health',
+  'art_health', 'art_memory_candidate_submit',
  }
  assert a.read('server/art-darwin-arm64')==bins['darwin_arm64']; assert a.read('server/art-linux-amd64')==bins['linux_amd64']
 r=json.loads((d/'server.json').read_text()); assert r['version']==v and r['packages'][0]['fileSha256']==hashlib.sha256((d/f'agent-recall-trail_{v}.mcpb').read_bytes()).hexdigest()

@@ -7,13 +7,30 @@ use art_domain::{
 };
 use art_mcp::{
     ArtMcpServer, FeedbackInput, GovernanceUiOpenInput, HealthInput, KnowledgeProposeInput,
-    MemoryCaptureInput, ReadInput, RecallInput, SourceAnchorInput, governance_ui::UiView,
+    MemoryCandidateInput, MemoryCaptureInput, MemoryScopeType, ReadInput, RecallInput,
+    SourceAnchorInput, governance_ui::UiView,
 };
 use art_retrieval::{RecallDetail, RetrievalMode};
 use rmcp::handler::server::wrapper::Parameters;
 use rusqlite::Connection;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
+
+fn verified_anchor(root: &std::path::Path) -> SourceAnchorInput {
+    let path = root.join("verified-memory-evidence.txt");
+    fs::write(&path, b"focused MCP memory fixture verified").unwrap();
+    SourceAnchorInput {
+        kind: AnchorKind::FileSnapshot,
+        locator: path.display().to_string(),
+        source_version: Some("1".into()),
+        source_digest: Some(hex::encode(Sha256::digest(
+            b"focused MCP memory fixture verified",
+        ))),
+        excerpt: None,
+        metadata: json!({}),
+    }
+}
 
 fn server() -> (tempfile::TempDir, ArtMcpServer) {
     let root = tempdir().unwrap();
@@ -24,7 +41,7 @@ fn server() -> (tempfile::TempDir, ArtMcpServer) {
 }
 
 #[tokio::test]
-async fn mcp_discovers_optional_embedding_without_changing_the_eight_tool_surface() {
+async fn mcp_discovers_optional_embedding_without_changing_the_nine_tool_surface() {
     let root = tempdir().unwrap();
     let paths = ArtPaths::from_explicit_root(root.path()).unwrap();
     let config_dir = root.path().join("config/art/embedding");
@@ -56,13 +73,13 @@ async fn mcp_discovers_optional_embedding_without_changing_the_eight_tool_surfac
         [46; 32],
     )
     .unwrap();
-    assert_eq!(server.tool_names().len(), 8);
+    assert_eq!(server.tool_names().len(), 9);
     let health = server.art_health(Parameters(HealthInput {})).await.unwrap();
     assert_eq!(health.0.fields["vector_status"], "stale");
 }
 
 #[test]
-fn tool_surface_is_exactly_eight_agent_safe_tools() {
+fn tool_surface_is_exactly_nine_agent_safe_tools() {
     let (_root, server) = server();
     let names = server.tool_names();
     assert_eq!(
@@ -73,6 +90,7 @@ fn tool_surface_is_exactly_eight_agent_safe_tools() {
             "art_health",
             "art_knowledge_governance",
             "art_knowledge_propose",
+            "art_memory_candidate_submit",
             "art_memory_capture",
             "art_read",
             "art_recall",
@@ -111,6 +129,142 @@ fn tool_surface_is_exactly_eight_agent_safe_tools() {
     assert_eq!(
         governance["inputSchema"]["additionalProperties"], false,
         "Agent governance input must reject undeclared authority fields"
+    );
+    let candidate = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "art_memory_candidate_submit")
+        .unwrap();
+    for forbidden in ["owner_agent_id", "status", "actor", "reviewer", "assurance"] {
+        assert!(
+            candidate["inputSchema"]["properties"]
+                .get(forbidden)
+                .is_none(),
+            "candidate tool exposed {forbidden}"
+        );
+    }
+    assert_eq!(
+        candidate["inputSchema"]["properties"]["candidate_index"]["maximum"],
+        0
+    );
+    assert_eq!(
+        candidate["inputSchema"]["properties"]["scope_type"]["$ref"],
+        "#/$defs/MemoryScopeType"
+    );
+    assert_eq!(
+        candidate["inputSchema"]["$defs"]["MemoryScopeType"]["enum"],
+        json!(["session", "repository", "workspace", "machine", "user"]),
+        "candidate scope schema must prevent the host Agent from inventing unsupported scope names"
+    );
+}
+
+#[tokio::test]
+async fn automatic_candidate_tool_is_default_off_then_uses_bound_agent_and_policy() {
+    let (root, server) = server();
+    let evidence_path = root.path().join("mcp-candidate-evidence.txt");
+    fs::write(&evidence_path, b"focused candidate contract passed").unwrap();
+    let evidence_digest = hex::encode(Sha256::digest(b"focused candidate contract passed"));
+    let input = MemoryCandidateInput {
+        trigger_receipt_id: "artamt_fixture".into(),
+        candidate_index: 0,
+        title: "Verified MCP candidate".into(),
+        summary: "The bounded MCP candidate passed its focused verification.".into(),
+        payload: MemoryPayload::Procedure(ProcedurePayload {
+            prerequisites: vec!["Use the current ART candidate runtime.".into()],
+            steps: vec!["Submit through the bound candidate tool.".into()],
+            verification: vec!["Run the focused MCP contract tests.".into()],
+            rollback: vec!["Disable global automatic memory.".into()],
+            do_not_use_when: vec!["The source receipt is stale.".into()],
+        }),
+        scope_type: MemoryScopeType::Repository,
+        scope_key: "agent-recall-trail".into(),
+        sensitivity: Sensitivity::Internal,
+        anchors: vec![SourceAnchorInput {
+            kind: AnchorKind::FileSnapshot,
+            locator: evidence_path.display().to_string(),
+            source_version: Some("focused-1".into()),
+            source_digest: Some(evidence_digest),
+            excerpt: None,
+            metadata: json!({"evidence_scope":"art-mcp candidate contract"}),
+        }],
+    };
+    let disabled = server
+        .art_memory_candidate_submit(Parameters(input.clone()))
+        .await
+        .unwrap();
+    assert_eq!(disabled.0.fields["disposition"], "disabled");
+
+    art_agent_store::AutoMemoryConfigStore::new(root.path())
+        .set_enabled(true, "human:governance-ui")
+        .unwrap();
+    let mut input = input;
+    input.trigger_receipt_id = "different-forged-trigger".into();
+    let Err(forged) = server
+        .art_memory_candidate_submit(Parameters(input.clone()))
+        .await
+    else {
+        panic!("forged trigger receipt unexpectedly accepted");
+    };
+    assert!(forged.contains("ART_PERMISSION_DENIED"));
+    let vault = art_agent_store::AgentVault::open(
+        root.path()
+            .join("data/art/agents/codex-primary/art.sqlite3"),
+        AgentId::from_str("codex-primary").unwrap(),
+    )
+    .unwrap();
+    let event_hash = hex::encode(Sha256::digest(b"mcp-candidate-trigger"));
+    let trigger = vault
+        .claim_auto_memory_trigger(
+            &art_agent_store::AutoMemoryConfigStore::new(root.path()),
+            "mcp-session",
+            "mcp-turn",
+            &event_hash,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    let mut input = input;
+    input.trigger_receipt_id = trigger.receipt_id;
+    let result = server
+        .art_memory_candidate_submit(Parameters(input))
+        .await
+        .unwrap();
+    assert_eq!(result.0.fields["agent_id"], "codex-primary");
+    assert_eq!(result.0.fields["outcome"], "activated");
+    assert_eq!(result.0.fields["status"], "active");
+    assert_eq!(result.0.fields["policy_actor"], "system_policy");
+    let memory_id = result.0.fields["memory_id"].as_str().unwrap();
+    let recalled = server
+        .art_recall(Parameters(RecallInput {
+            query: "bounded candidate focused verification".into(),
+            mode: RetrievalMode::Lexical,
+            detail: RecallDetail::Recall,
+            include_candidates: false,
+            budget_tokens: 1_800,
+            max_private_results: None,
+            max_knowledge_results: None,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        recalled.0.fields["private_memories"][0]["subject_ref"],
+        format!("memory:{memory_id}@1")
+    );
+    let exact = server
+        .art_read(Parameters(ReadInput {
+            subject_ref: format!("memory:{memory_id}@1"),
+            include_anchors: true,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(exact.0.fields["id"], memory_id);
+    assert_eq!(exact.0.fields["status"], "active");
+
+    let health = server.art_health(Parameters(HealthInput {})).await.unwrap();
+    assert_eq!(health.0.fields["auto_memory"]["enabled"], true);
+    assert_eq!(
+        health.0.fields["auto_memory"]["policy_version"],
+        "art.auto-memory.policy.v1"
     );
 }
 
@@ -267,8 +421,13 @@ async fn recall_result_depth_is_forwarded_to_validation() {
 
 #[tokio::test]
 async fn capture_then_recall_stays_bound_to_process_identity() {
-    let (_root, server) = server();
+    let (root, server) = server();
     let input = MemoryCaptureInput {
+        capture_origin: Some(art_mcp::CaptureOrigin::UserRequested),
+        request_basis: Some("User explicitly requested this fixture memory".into()),
+        value_reason: None,
+        session_id: None,
+        turn_id: None,
         memory_id: None,
         expected_revision: None,
         title: "ART MCP shutdown".into(),
@@ -280,18 +439,11 @@ async fn capture_then_recall_stays_bound_to_process_identity() {
             rollback: vec!["重开会话".into()],
             do_not_use_when: vec!["outside the documented scope".into()],
         }),
-        scope_type: "repository".into(),
+        scope_type: MemoryScopeType::Repository,
         scope_key: "agent-recall-trail".into(),
         sensitivity: Sensitivity::Private,
         idempotency_key: "mcp-capture-1".into(),
-        anchors: vec![SourceAnchorInput {
-            kind: AnchorKind::TestReceipt,
-            locator: "test:mcp-eof".into(),
-            source_version: Some("1".into()),
-            source_digest: Some("sha256:abc".into()),
-            excerpt: Some("exit code 0".into()),
-            metadata: json!({"exit_code":0,"output_hash":"abc"}),
-        }],
+        anchors: vec![verified_anchor(root.path())],
         unanchored_candidate: false,
         no_persist_provenance: false,
     };
@@ -331,9 +483,14 @@ async fn capture_then_recall_stays_bound_to_process_identity() {
 
 #[tokio::test]
 async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
-    let (_root, server) = server();
+    let (root, server) = server();
     let original = server
         .art_memory_capture(Parameters(MemoryCaptureInput {
+            capture_origin: Some(art_mcp::CaptureOrigin::UserRequested),
+            request_basis: Some("User explicitly requested this fixture memory".into()),
+            value_reason: None,
+            session_id: None,
+            turn_id: None,
             memory_id: None,
             expected_revision: None,
             title: "Revision one".into(),
@@ -343,18 +500,11 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
                 applicability: "revision test".into(),
                 exceptions: vec![],
             }),
-            scope_type: "user".into(),
+            scope_type: MemoryScopeType::User,
             scope_key: "*".into(),
             sensitivity: Sensitivity::Private,
             idempotency_key: "revision-original".into(),
-            anchors: vec![SourceAnchorInput {
-                kind: AnchorKind::UserStatement,
-                locator: "test:revision-one".into(),
-                source_version: None,
-                source_digest: None,
-                excerpt: Some("first".into()),
-                metadata: json!({}),
-            }],
+            anchors: vec![verified_anchor(root.path())],
             unanchored_candidate: false,
             no_persist_provenance: false,
         }))
@@ -362,6 +512,11 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
         .unwrap();
     let memory_id = original.0.fields["memory_id"].as_str().unwrap().to_owned();
     let revision = MemoryCaptureInput {
+        capture_origin: Some(art_mcp::CaptureOrigin::UserRequested),
+        request_basis: Some("User explicitly requested this fixture memory".into()),
+        value_reason: None,
+        session_id: None,
+        turn_id: None,
         memory_id: Some(memory_id.clone()),
         expected_revision: Some(1),
         title: "Revision two".into(),
@@ -371,18 +526,11 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
             applicability: "revision test".into(),
             exceptions: vec![],
         }),
-        scope_type: "user".into(),
+        scope_type: MemoryScopeType::User,
         scope_key: "*".into(),
         sensitivity: Sensitivity::Private,
         idempotency_key: "revision-update".into(),
-        anchors: vec![SourceAnchorInput {
-            kind: AnchorKind::UserStatement,
-            locator: "test:revision-two".into(),
-            source_version: None,
-            source_digest: None,
-            excerpt: Some("second".into()),
-            metadata: json!({}),
-        }],
+        anchors: vec![verified_anchor(root.path())],
         unanchored_candidate: false,
         no_persist_provenance: false,
     };
@@ -398,6 +546,11 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
     assert_eq!(replay.0.fields["revision"], 2);
     let stale = server
         .art_memory_capture(Parameters(MemoryCaptureInput {
+            capture_origin: Some(art_mcp::CaptureOrigin::UserRequested),
+            request_basis: Some("User explicitly requested this fixture memory".into()),
+            value_reason: None,
+            session_id: None,
+            turn_id: None,
             memory_id: Some(memory_id),
             expected_revision: Some(1),
             title: "Revision conflict".into(),
@@ -407,18 +560,11 @@ async fn exact_expected_revision_updates_atomically_and_replays_idempotently() {
                 applicability: "revision test".into(),
                 exceptions: vec![],
             }),
-            scope_type: "user".into(),
+            scope_type: MemoryScopeType::User,
             scope_key: "*".into(),
             sensitivity: Sensitivity::Private,
             idempotency_key: "revision-stale".into(),
-            anchors: vec![SourceAnchorInput {
-                kind: AnchorKind::UserStatement,
-                locator: "test:revision-stale".into(),
-                source_version: None,
-                source_digest: None,
-                excerpt: Some("conflict".into()),
-                metadata: json!({}),
-            }],
+            anchors: vec![verified_anchor(root.path())],
             unanchored_candidate: false,
             no_persist_provenance: false,
         }))
@@ -434,6 +580,11 @@ async fn no_persist_provenance_is_rejected_with_stable_code() {
     let (_root, server) = server();
     let result = server
         .art_memory_capture(Parameters(MemoryCaptureInput {
+            capture_origin: Some(art_mcp::CaptureOrigin::UserRequested),
+            request_basis: Some("User explicitly requested this fixture memory".into()),
+            value_reason: None,
+            session_id: None,
+            turn_id: None,
             memory_id: None,
             expected_revision: None,
             title: "forbidden".into(),
@@ -445,7 +596,7 @@ async fn no_persist_provenance_is_rejected_with_stable_code() {
                 rollback: vec!["x".into()],
                 do_not_use_when: vec!["outside the documented scope".into()],
             }),
-            scope_type: "user".into(),
+            scope_type: MemoryScopeType::User,
             scope_key: "*".into(),
             sensitivity: Sensitivity::Private,
             idempotency_key: "blocked".into(),
@@ -494,9 +645,14 @@ async fn feedback_idempotency_replays_and_conflicting_payload_is_rejected() {
 
 #[tokio::test]
 async fn original_six_agent_safe_tools_keep_success_paths_and_stale_reads_fail_closed() {
-    let (_root, server) = server();
+    let (root, server) = server();
     let captured = server
         .art_memory_capture(Parameters(MemoryCaptureInput {
+            capture_origin: Some(art_mcp::CaptureOrigin::UserRequested),
+            request_basis: Some("User explicitly requested this fixture memory".into()),
+            value_reason: None,
+            session_id: None,
+            turn_id: None,
             memory_id: None,
             expected_revision: None,
             title: "Original six tools".into(),
@@ -508,18 +664,11 @@ async fn original_six_agent_safe_tools_keep_success_paths_and_stale_reads_fail_c
                 rollback: vec!["不发布".into()],
                 do_not_use_when: vec!["outside the documented scope".into()],
             }),
-            scope_type: "repository".into(),
+            scope_type: MemoryScopeType::Repository,
             scope_key: "agent-recall-trail".into(),
             sensitivity: Sensitivity::Internal,
             idempotency_key: "all-tools-capture".into(),
-            anchors: vec![SourceAnchorInput {
-                kind: AnchorKind::TestReceipt,
-                locator: "test:all-tools".into(),
-                source_version: None,
-                source_digest: Some("sha256:all-tools".into()),
-                excerpt: Some("original six-tool contract".into()),
-                metadata: json!({"exit_code":0,"output_hash":"all-tools"}),
-            }],
+            anchors: vec![verified_anchor(root.path())],
             unanchored_candidate: false,
             no_persist_provenance: false,
         }))

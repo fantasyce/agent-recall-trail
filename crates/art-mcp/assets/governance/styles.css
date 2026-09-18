@@ -44,6 +44,7 @@ main { min-height: 520px; padding: 46px 42px 60px; }
 .section-heading { max-width: 740px; margin-bottom: 34px; }
 .section-heading > p:last-child { color: var(--muted); line-height: 1.65; }
 .policy-card { display: flex; justify-content: space-between; align-items: center; gap: 30px; max-width: 830px; padding: 28px 30px; border: 1px solid var(--ink); background: var(--white); }
+.auto-memory-card { margin-top: 22px; }
 .policy-card p:last-child { max-width: 620px; margin: 9px 0 0; color: var(--muted); line-height: 1.55; }
 .switch { cursor: pointer; }
 .switch input { position: absolute; opacity: 0; }
@@ -56,9 +57,18 @@ main { min-height: 520px; padding: 46px 42px 60px; }
 .trust-note strong { color: var(--oxide); }
 .trust-note p { margin: 0; line-height: 1.6; }
 .record-list { display: grid; gap: 16px; }
+.candidate-heading { margin-top: 54px; }
 .proposal { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: start; padding: 24px; border: 1px solid var(--line); background: var(--white); }
 .proposal-meta { margin: 11px 0 0; color: var(--muted); font: .75rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .proposal p { max-width: 700px; line-height: 1.55; }
+.memory-candidate { grid-template-columns: 1fr; }
+.memory-candidate details { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.memory-candidate summary { cursor: pointer; font-weight: 700; }
+.memory-candidate li { margin-top: 8px; overflow-wrap: anywhere; color: var(--muted); }
+.candidate-review-form { display: grid; grid-template-columns: minmax(120px, .3fr) minmax(0, 1fr); gap: 10px 18px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.candidate-review-form label { padding-top: 10px; font-weight: 700; }
+.candidate-review-form input, .candidate-review-form textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong); background: white; line-height: 1.5; resize: vertical; }
+.candidate-review-form .panel-actions { grid-column: 1 / -1; }
 .label-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
 .badge { display: inline-flex; align-items: center; min-height: 25px; padding: 3px 8px; border: 1px solid var(--line-strong); font: 700 .68rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .03em; background: var(--sheet); }
 .badge::before { content: ""; width: 6px; height: 6px; margin-right: 6px; border: 1px solid currentColor; border-radius: 50%; }
@@ -71,7 +81,7 @@ main { min-height: 520px; padding: 46px 42px 60px; }
 .action:hover:not(:disabled) { border-color: var(--moss); color: var(--moss); }
 .action.primary:hover:not(:disabled) { background: var(--moss); color: white; }
 .action.danger:hover:not(:disabled) { background: var(--oxide); color: white; }
-button:focus-visible, textarea:focus-visible, [tabindex="0"]:focus-visible { outline: 3px solid rgb(53 95 75 / 34%); outline-offset: 3px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex="0"]:focus-visible { outline: 3px solid rgb(53 95 75 / 34%); outline-offset: 3px; }
 .audit-spine, .review-history { position: relative; list-style: none; margin: 0; padding: 0 0 0 28px; }
 .audit-spine::before, .review-history::before { content: ""; position: absolute; left: 7px; top: 8px; bottom: 8px; width: 1px; background: var(--moss); }
 .audit-spine li, .review-history li { position: relative; padding: 0 0 26px 22px; }
@@ -164,6 +174,8 @@ dialog::backdrop { background: rgb(24 32 29 / 42%); backdrop-filter: blur(2px); 
   .tabs button { white-space: nowrap; }
   main { padding: 34px 22px 48px; }
   .policy-card, .proposal { grid-template-columns: 1fr; }
+  .candidate-review-form { grid-template-columns: 1fr; }
+  .candidate-review-form label { padding-top: 4px; }
   .policy-card { align-items: start; }
   .trust-note { grid-template-columns: 1fr; gap: 6px; }
   .shell > footer { padding: 16px 22px; }

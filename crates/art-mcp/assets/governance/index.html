@@ -23,7 +23,7 @@
     </header>
     <nav class="tabs" aria-label="知识治理页面">
       <button type="button" data-view="pending">待处理</button>
-      <button type="button" data-view="settings">委托设置</button>
+      <button type="button" data-view="settings">设置</button>
       <button type="button" data-view="audit">审计轨迹</button>
     </nav>
     <main id="workspace" tabindex="-1">
@@ -45,6 +45,23 @@
             <span class="switch-track" aria-hidden="true"><span></span></span>
           </label>
         </article>
+        <article class="policy-card auto-memory-card">
+          <div>
+            <p class="card-kicker">本机全局设置</p>
+            <h3>全局自动记忆</h3>
+            <p id="auto-memory-explanation">读取中…</p>
+            <dl id="auto-memory-diagnostics" class="metadata-grid compact"></dl>
+          </div>
+          <label class="switch">
+            <span class="visually-hidden">开启本机全部 Agent 的选择性自动记忆</span>
+            <input id="auto-memory-toggle" type="checkbox">
+            <span class="switch-track" aria-hidden="true"><span></span></span>
+          </label>
+        </article>
+        <div class="trust-note">
+          <strong>自动记忆边界</strong>
+          <p>默认关闭，并影响本机全部 Agent 的主动记忆与 Hook 触发记忆，两者共享预算和价值标准。关闭时不会自动提交或激活候选；用户明确要求的记忆、召回和人工审核不受影响。此开关与共享知识的 Agent 委托治理互不关联。</p>
+        </div>
         <div class="trust-note">
           <strong>信任边界</strong>
           <p>ART 会记录“AgentDelegated”，不会把代理操作伪装成人工审核。授权依据是当前对话中的明确指令，而不是已验证的人类身份。</p>
@@ -57,6 +74,12 @@
           <p>先查看完整正文、锁定来源、差异和审核历史，再作决定。队列不提供快捷批准或发布。</p>
         </div>
         <div id="proposal-list" class="record-list" aria-busy="true"></div>
+        <div class="section-heading candidate-heading">
+          <p class="folio">MEMORY CANDIDATES / <span id="candidate-count">0</span></p>
+          <h2>待确认的私有记忆</h2>
+          <p>这里只显示当前 Agent 的私有记忆候选和修订提案。查看来源、价值理由、原内容与拟议内容后决定；共享知识需通过上方独立治理流程。</p>
+        </div>
+        <div id="memory-candidate-list" class="record-list" aria-busy="true"></div>
       </section>
       <section id="audit-view" class="view" aria-labelledby="audit-title" hidden>
         <div class="section-heading">
@@ -65,6 +88,8 @@
           <p>每条记录沿同一条来源脊线排列，显示谁在何种策略下做了什么。</p>
         </div>
         <ol id="audit-list" class="audit-spine"></ol>
+        <h3>私有记忆修订审核</h3>
+        <ol id="memory-review-audit" class="audit-spine"></ol>
       </section>
     </main>
     <footer>

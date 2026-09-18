@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release": "v0.3.5",
-  "release_commit": "73997f11d0e6e2ec24dd794a478630a0589a4e6e",
-  "published_at": "2026-09-09T04:07:09Z",
+  "release": "v0.3.6",
+  "release_commit": "resolved-by-v0.3.6-tag",
+  "published_at": null,
   "channels": [
-    {"id":"github-release","status":"published","checked_at":"2026-09-13T00:54:23Z","public_url":"https://github.com/fantasyce/agent-recall-trail/releases/tag/v0.3.5"},
-    {"id":"mcp-registry","status":"published","checked_at":"2026-09-13T00:54:23Z","public_url":"https://registry.modelcontextprotocol.io/v0.1/servers/io.github.fantasyce%2Fagent-recall-trail/versions/0.3.5"},
-    {"id":"github-pages","status":"published","public_url":"https://fantasyce.github.io/agent-recall-trail/"},
+    {"id":"github-release","status":"prepared","public_url":"https://github.com/fantasyce/agent-recall-trail/releases/tag/v0.3.6"},
+    {"id":"mcp-registry","status":"prepared","public_url":"https://registry.modelcontextprotocol.io/v0.1/servers/io.github.fantasyce%2Fagent-recall-trail/versions/0.3.6"},
+    {"id":"github-pages","status":"prepared","public_url":"https://fantasyce.github.io/agent-recall-trail/"},
     {"id":"github-discussion","status":"published","public_url":"https://github.com/fantasyce/agent-recall-trail/discussions/12"},
     {"id":"dsh-official-discussion","status":"published","checked_at":"2026-09-13T00:54:23Z","public_url":"https://github.com/deepseek-ai/deepseek-harness/discussions/6479"},
     {"id":"design-partners","status":"published","public_url":"https://github.com/fantasyce/agent-recall-trail/issues/3"},

@@ -9,10 +9,19 @@ ART separates private experience from shared knowledge instead of treating them 
 3. `art-knowledge` owns a private control store and a shareable Edition tree. Proposals and source locks remain private; Edition Markdown and manifests contain commitments only.
 4. `art-retrieval` implements one progressive recall pipeline over private and shared lanes. It uses rebuildable navigation, lexical, and optional semantic projections while canonical Agent artifacts and immutable shared files/events remain authoritative.
 5. `art-mcp` binds one Agent identity at process start and exposes exactly
-   eight Agent-safe tools over stdio. It owns the page-session manager and a
+   nine Agent-safe tools over stdio. It owns the page-session manager and a
    random loopback listener started on demand by `art_governance_ui_open`.
 6. `art-cli` exposes diagnostics, integration previews, import/export, and
-   reindex entry points; normal Codex/DSH human governance is page-first.
+   reindex entry points plus a lightweight Codex hook entry; normal Codex/DSH
+   human governance is page-first.
+
+Selective automatic memory is a candidate-first side path. Codex invokes a
+lightweight hook after prompts and completed turns. A machine-wide switch is
+read before extraction, submission, and policy activation. Trigger receipts
+enforce one candidate per admitted turn, three admissions per session, and a
+ten-minute cooldown. Only current independently verifiable evidence can cause
+policy activation; ambiguous, conflicting, or replacement material remains a
+Candidate for the bound Agent's human review.
 
 ## Trust flow
 
@@ -35,6 +44,7 @@ Immutable revocation/replacement events are reconciled on startup.
 ```text
 <ART_HOME>/
   config/art/agents/<agent-id>.json
+  config/art/auto-memory.json                    # optional; missing means off
   config/art/embedding/default.json               # optional, owner-created
   config/art/commitment.key
   data/art/agents/<agent-id>/art.sqlite3

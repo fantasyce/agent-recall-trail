@@ -1,6 +1,6 @@
 {
   "name": "agent-recall-trail",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Private Agent memory and governed shared knowledge for Codex",
   "author": {
     "name": "Agent Recall Trail contributors",
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Agent Recall Trail",
     "shortDescription": "Private Agent memory plus reviewed shared knowledge.",
-    "longDescription": "Recall one Codex Agent's private experience and governed Knowledge Editions through a local stdio MCP server. Human governance uses ART's local page; optional delegated governance stays default-off and distinctly audited.",
+    "longDescription": "Recall one Agent's private experience and governed Knowledge Editions through a local stdio MCP server. A default-off machine-wide switch covers both proactive Agent memory and Hook-triggered memory with shared value guidance and budget. Explicit requests use a sanitized request basis. Human governance uses ART's local page; shared knowledge remains separately governed.",
     "developerName": "Agent Recall Trail contributors",
     "category": "Developer Tools",
     "capabilities": ["Local", "Read", "Write"],

@@ -24,4 +24,7 @@ assert entry["sha256"] == sys.argv[2], (entry["sha256"], sys.argv[2])
 PY
 rg -q "^${schema_sha}  docs/artifacts/mcp-tools.schema.json$" "$repo_root/docs/artifacts/checksums.txt"
 
+binary_sha="$(shasum -a 256 "$art_bin" | awk '{print $1}')"
+rg -q "^${binary_sha}  target/release/art$" "$repo_root/docs/artifacts/checksums.txt"
+
 echo 'generated artifact contract passed'

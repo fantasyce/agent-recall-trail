@@ -26,6 +26,24 @@ Use only `mcp__art__art_*` for ART memory and knowledge operations.
 
 ## Capture and knowledge
 
+- Read and apply [private-memory value standard v1](../../../plugin/agent-recall-trail/skills/agent-recall-trail/references/private-memory-value-v1.md), the exact standard also embedded in the Codex Hook continuation.
+- During ordinary DSH work, proactively capture a qualifying conclusion with
+  `mcp__art__art_memory_capture`, `capture_origin=agent_initiated`, and a bounded
+  `value_reason` explaining future use. No DSH Hook is needed or installed.
+  Check `art_health.auto_memory` first; missing, invalid, or disabled settings
+  prohibit automatic submission. Do not emulate Codex's Stop Hook or call
+  `art_memory_candidate_submit` without a genuine ART trigger receipt.
+- A current explicit request to remember uses `capture_origin=user_requested`
+  and a short sanitized `request_basis`, never the full prompt. This is an Agent
+  assertion, not host proof. Explicit capture and recall remain available when
+  automatic memory is off; source and sensitivity checks still apply.
+- Agent-initiated and Hook-triggered memory share limits, cooldown, and value
+  standard. Omitted origin means automatic. Session/turn strings through MCP
+  are Agent-asserted; without trusted identity the persistent Agent/day fallback
+  applies. Never invent references or switch keys/origins to bypass `disabled`
+  or `rate_limited`. Report `pending_review` as pending, not Active memory.
+- Automatic correction requires `memory_id` and exact
+  `expected_revision` and preserves the Active content pending human review.
 - Capture only reusable, non-obvious, sourced experience with the documented typed payload, narrow scope, sensitivity, and idempotency key.
 - Select the anchor kind exactly from `host_session_range`, `user_statement`,
   `file_snapshot`, `git_object`, `command_receipt`, `test_receipt`,

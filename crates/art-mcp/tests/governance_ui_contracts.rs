@@ -1,13 +1,219 @@
 use std::str::FromStr;
 
+use art_agent_store::{AgentVault, AutoMemoryConfigStore};
 use art_domain::{
     agent::AgentId,
+    anchor::{AnchorKind, SourceAnchor},
     knowledge::{KnowledgeDraft, ProposalSourceLock, ProposalSourceType, ReviewActor},
+    memory::{MemoryArtifact, MemoryPayload, MemoryScope, SemanticPayload, Sensitivity},
 };
 use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use art_mcp::governance_ui::{GovernanceUiManager, UiView};
 use reqwest::{Client, StatusCode};
+use sha2::Digest;
 use tempfile::tempdir;
+
+#[tokio::test]
+async fn governance_ui_is_the_only_authenticated_global_auto_memory_switch() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    let config = AutoMemoryConfigStore::new(root.path());
+    let manager = GovernanceUiManager::new(
+        KnowledgeVault::open(root.path().join("knowledge"), [51_u8; 32]).unwrap(),
+        agent,
+        "f".repeat(64),
+    )
+    .with_auto_memory(config.clone(), private);
+    let session = manager.open_session(UiView::Settings, None).await.unwrap();
+    let client = Client::new();
+    let bootstrap: serde_json::Value = client
+        .get(session.url.join("/api/bootstrap").unwrap())
+        .query(&[("session", session.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(bootstrap["auto_memory"]["settings"]["enabled"], false);
+    assert_eq!(
+        bootstrap["auto_memory"]["settings"]["reason"],
+        "configuration_missing"
+    );
+
+    let hostile = client
+        .post(session.url.join("/api/auto-memory").unwrap())
+        .header("origin", "https://hostile.invalid")
+        .header("x-art-csrf", bootstrap["csrf_token"].as_str().unwrap())
+        .json(&serde_json::json!({"session":session.capability,"enabled":true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(hostile.status(), StatusCode::FORBIDDEN);
+    assert!(!config.status().enabled);
+
+    let accepted = client
+        .post(session.url.join("/api/auto-memory").unwrap())
+        .header("origin", session.origin.as_str())
+        .header("x-art-csrf", bootstrap["csrf_token"].as_str().unwrap())
+        .json(&serde_json::json!({"session":session.capability,"enabled":true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let receipt: serde_json::Value = accepted.json().await.unwrap();
+    assert_eq!(receipt["settings"]["enabled"], true);
+    assert_eq!(receipt["audit_actor"], "human:local-governance-ui");
+    assert!(AutoMemoryConfigStore::new(root.path()).status().enabled);
+    let after: serde_json::Value = client
+        .get(session.url.join("/api/bootstrap").unwrap())
+        .query(&[("session", session.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after["governance_mode"], "human_review");
+}
+
+#[tokio::test]
+async fn bound_agent_can_review_confirm_and_reject_automatic_candidates() {
+    let root = tempdir().unwrap();
+    let agent = AgentId::from_str("codex-primary").unwrap();
+    let private = AgentVault::open(root.path().join("agent.sqlite3"), agent.clone()).unwrap();
+    let config = AutoMemoryConfigStore::new(root.path());
+    config.set_enabled(true, "human:governance-ui").unwrap();
+    let make_candidate = |title: &str, trigger: &str| {
+        let memory = MemoryArtifact::new(
+            agent.clone(),
+            title,
+            "A correction needs human confirmation.",
+            MemoryPayload::Semantic(SemanticPayload {
+                statement: format!("Use the corrected behavior for {trigger}."),
+                applicability: "This repository only.".into(),
+                exceptions: vec!["Revalidate after changes.".into()],
+            }),
+            MemoryScope::Repository("agent-recall-trail".into()),
+            Sensitivity::Internal,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let anchor = SourceAnchor::new(
+            agent.clone(),
+            AnchorKind::UserStatement,
+            format!("user-statement:{trigger}"),
+            None,
+            serde_json::json!({"signal":"correction"}),
+            Sensitivity::Private,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let event_hash = hex::encode(sha2::Sha256::digest(trigger.as_bytes()));
+        let receipt = private
+            .claim_auto_memory_trigger(&config, trigger, "turn-1", &event_hash, chrono::Utc::now())
+            .unwrap()
+            .receipt_id;
+        private
+            .submit_auto_candidate(&config, &memory, &[anchor], &receipt, 0)
+            .unwrap()
+            .memory_id
+            .unwrap()
+    };
+    let confirm_id = make_candidate("Confirm candidate", "trigger-confirm");
+    let reject_id = make_candidate("Reject candidate", "trigger-reject");
+    let edit_id = make_candidate("Edit candidate", "trigger-edit");
+    let manager = GovernanceUiManager::new(
+        KnowledgeVault::open(root.path().join("knowledge"), [52_u8; 32]).unwrap(),
+        agent,
+        "e".repeat(64),
+    )
+    .with_auto_memory(config, private.clone());
+    let session = manager.open_session(UiView::Pending, None).await.unwrap();
+    let client = Client::new();
+    let bootstrap: serde_json::Value = client
+        .get(session.url.join("/api/bootstrap").unwrap())
+        .query(&[("session", session.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed: serde_json::Value = client
+        .get(session.url.join("/api/memory-candidates").unwrap())
+        .query(&[("session", session.capability.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["bound_agent_id"], "codex-primary");
+    assert_eq!(listed["candidates"].as_array().unwrap().len(), 3);
+    assert!(
+        serde_json::to_string(&listed)
+            .unwrap()
+            .contains("evidence_requires_human_review")
+    );
+
+    for (memory_id, action, expected) in [
+        (confirm_id.as_str(), "confirm", "active"),
+        (reject_id.as_str(), "reject", "rejected"),
+    ] {
+        let response = client.post(session.url.join("/api/memory-candidate-review").unwrap())
+            .header("origin",session.origin.as_str())
+            .header("x-art-csrf",bootstrap["csrf_token"].as_str().unwrap())
+            .json(&serde_json::json!({"session":session.capability,"memory_id":memory_id,"revision":1,"action":action,"reason":"Human reviewed the bounded evidence."}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.json::<serde_json::Value>().await.unwrap()["status"],
+            expected
+        );
+    }
+
+    let edited_payload = MemoryPayload::Semantic(SemanticPayload {
+        statement: "Use the human-corrected behavior.".into(),
+        applicability: "This repository after review.".into(),
+        exceptions: vec!["Revalidate after changes.".into()],
+    });
+    let edited = client
+        .post(session.url.join("/api/memory-candidate-review").unwrap())
+        .header("origin", session.origin.as_str())
+        .header("x-art-csrf", bootstrap["csrf_token"].as_str().unwrap())
+        .json(&serde_json::json!({
+            "session":session.capability,
+            "memory_id":edit_id,
+            "revision":1,
+            "action":"edit_confirm",
+            "reason":"Human corrected the bounded conclusion.",
+            "title":"Edited candidate",
+            "summary":"The reviewed correction is now precise.",
+            "payload":edited_payload,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(edited.status(), StatusCode::OK);
+    let edited_receipt: serde_json::Value = edited.json().await.unwrap();
+    assert_eq!(edited_receipt["status"], "active");
+    assert_eq!(edited_receipt["revision"], 2);
+    let stored = private.read(&edit_id).unwrap();
+    assert_eq!(stored.title, "Edited candidate");
+    assert_eq!(stored.current_revision, 2);
+
+    let stale = client
+        .post(session.url.join("/api/memory-candidate-review").unwrap())
+        .header("origin", session.origin.as_str())
+        .header("x-art-csrf", bootstrap["csrf_token"].as_str().unwrap())
+        .json(&serde_json::json!({"session":session.capability,"memory_id":edit_id,"revision":1,"action":"confirm","reason":"stale replay"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+}
 
 fn source(agent: &AgentId, source_id: &str) -> ProposalSourceLock {
     ProposalSourceLock {
@@ -527,6 +733,9 @@ async fn governance_ui_serves_the_accessible_detail_workspace_assets() {
     assert!(html.contains("id=\"review-reason\""));
     assert!(html.contains("maxlength=\"1000\""));
     assert!(html.contains("aria-live=\"polite\""));
+    assert!(html.contains("id=\"auto-memory-toggle\""));
+    assert!(html.contains("本机全部 Agent"));
+    assert!(html.contains("id=\"memory-candidate-list\""));
 
     let script = client
         .get(session.url.join("/app.js").unwrap())
@@ -543,6 +752,9 @@ async fn governance_ui_serves_the_accessible_detail_workspace_assets() {
     assert!(script.contains("5 * 60 * 1000"));
     assert!(script.contains("readOnly = busy || ui.expired || ui.conflict"));
     assert!(script.contains("审核详情"));
+    assert!(script.contains("loadMemoryCandidates"));
+    assert!(script.contains("/api/auto-memory"));
+    assert!(script.contains("edit_confirm"));
     assert!(!script.contains("window.prompt"));
     assert!(!script.contains("window.confirm"));
 

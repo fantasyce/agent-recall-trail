@@ -18,12 +18,17 @@ Contract tests cover:
 - provider-neutral embedding validation, owner-only runtime files, isolated
   epoch/fingerprint-bound semantic projections, resumable rebuild, semantic
   no-overlap retrieval, hybrid exact priority, and byte-equivalent lexical fallback;
-- eight-tool MCP success paths, strict object output schemas, loopback
+- nine-tool MCP success paths, strict object output schemas, loopback
   governance sessions, persistent default-off delegation, atomic
   `AgentDelegated` publication, form Elicitation compatibility, non-consent
   and malformed-response no-write behavior, revision staleness, DB busy,
   shutdown, no-persist rejection, legacy/current protocol initialization,
   JSON-only debug stdout, and EOF/signals;
+- selective automatic-memory default-off and runtime-disable boundaries,
+  machine-wide persistence, trigger/submission idempotency, session limits,
+  cooldown and restart recovery, 60-plus bilingual quality cases, sensitive
+  no-write behavior, independently verified activation, candidate review, and
+  100-run non-trigger hook latency;
 - CLI confirmation boundaries, config priority, deep Doctor diagnostics, private permissions, integration previews, reviewable Markdown scan, safe copy, and import/export behavior;
 - thin Across Context contract expiry, no-persist, and invalidation behavior without an AAA adapter.
 
@@ -41,6 +46,9 @@ Acceptance uses task-owned storage and temporary opt-in configuration only:
 6. Route, lexical recall, exact read, governed full scan, and unconfigured semantic/hybrid fallback in both hosts.
 7. Skill discovery and failure-boundary behavior in both hosts.
 8. Graceful EOF, abnormal disconnect, concurrency, repeated-query, file-permission, source-read-only, and residue checks.
+9. Codex hook trust, default-off zero work, opt-in Candidate activation/pending
+   review, governance switch and review in the in-app browser, and DSH explicit
+   capture/recall compatibility without a Codex-hook dependency.
 
 The reproducible local stress artifact runs 500 graceful sessions, 100 abnormal disconnects, 1,000 queries in one process, 8 concurrent clients, an idle-FD ceiling of 16, and a final healthy Doctor. The release performance dataset contains 10,000 private memories and 5,000 shared Editions; reports must retain startup, cold-index, capture p95, steady recall p50/p95/p99, and concurrent maximum separately.
 

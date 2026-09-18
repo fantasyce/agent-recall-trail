@@ -1,0 +1,29 @@
+{
+  "description": "Opt-in selective ART automatic memory. The machine-wide ART switch remains authoritative and defaults off.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"$PLUGIN_ROOT/scripts/launch-mcp.sh\" auto-memory hook --agent codex-primary",
+            "timeout": 3,
+            "statusMessage": "Checking for a correction signal"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"$PLUGIN_ROOT/scripts/launch-mcp.sh\" auto-memory hook --agent codex-primary",
+            "timeout": 3,
+            "statusMessage": "Checking selective ART memory"
+          }
+        ]
+      }
+    ]
+  }
+}

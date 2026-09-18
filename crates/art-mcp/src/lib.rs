@@ -12,7 +12,10 @@ use std::{
     time::Duration,
 };
 
-use art_agent_store::AgentVault;
+use art_agent_store::{
+    AgentVault, AutoMemoryConfigStore, IntakeAttribution, IntakeOrigin, MemoryIntakeRequest,
+    MemoryIntakeResult,
+};
 use art_domain::{
     ArtError, ArtResult,
     agent::{AgentId, ArtPaths},
@@ -21,9 +24,7 @@ use art_domain::{
         DelegatedAuthorizationBasis, KnowledgeDraft, KnowledgeProposal, ProposalSourceLock,
         ProposalSourceType, ProposalStatus, ReviewActor, RiskLevel,
     },
-    memory::{
-        MemoryArtifact, MemoryPayload, MemoryScope, MemoryStatus, Sensitivity, canonical_json_hash,
-    },
+    memory::{MemoryArtifact, MemoryPayload, MemoryScope, Sensitivity, canonical_json_hash},
 };
 use art_knowledge::{DelegationMode, GovernanceSnapshot, KnowledgeVault};
 use art_retrieval::{
@@ -86,14 +87,39 @@ pub struct SourceAnchorInput {
     pub metadata: Value,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScopeType {
+    Session,
+    Repository,
+    Workspace,
+    Machine,
+    User,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureOrigin {
+    UserRequested,
+    AgentInitiated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryCaptureInput {
+    pub capture_origin: Option<CaptureOrigin>,
+    pub request_basis: Option<String>,
+    pub value_reason: Option<String>,
+    /// Agent-asserted diagnostic reference; never trusted as host identity.
+    pub session_id: Option<String>,
+    /// Agent-asserted diagnostic reference; never trusted as host identity.
+    pub turn_id: Option<String>,
     pub memory_id: Option<String>,
     pub expected_revision: Option<u32>,
     pub title: String,
     pub summary: String,
     pub payload: MemoryPayload,
-    pub scope_type: String,
+    pub scope_type: MemoryScopeType,
     pub scope_key: String,
     pub sensitivity: Sensitivity,
     pub idempotency_key: String,
@@ -103,6 +129,21 @@ pub struct MemoryCaptureInput {
     pub unanchored_candidate: bool,
     #[serde(default)]
     pub no_persist_provenance: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryCandidateInput {
+    pub trigger_receipt_id: String,
+    #[schemars(range(min = 0, max = 0))]
+    pub candidate_index: u32,
+    pub title: String,
+    pub summary: String,
+    pub payload: MemoryPayload,
+    pub scope_type: MemoryScopeType,
+    pub scope_key: String,
+    pub sensitivity: Sensitivity,
+    pub anchors: Vec<SourceAnchorInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -190,6 +231,7 @@ pub struct ArtMcpServer {
     agent_id: AgentId,
     host_binding: String,
     private_vault: AgentVault,
+    auto_memory_config: AutoMemoryConfigStore,
     knowledge_vault: KnowledgeVault,
     governance_ui: GovernanceUiManager,
     recall_engine: RecallEngine,
@@ -205,6 +247,7 @@ impl ServerHandler for ArtMcpServer {}
 impl ArtMcpServer {
     pub fn open(paths: &ArtPaths, agent_id: AgentId, commitment_key: [u8; 32]) -> ArtResult<Self> {
         let private_vault = AgentVault::open(paths.agent_vault(&agent_id), agent_id.clone())?;
+        let auto_memory_config = AutoMemoryConfigStore::new(paths.root());
         let knowledge_vault = KnowledgeVault::open(paths.knowledge_vault(), commitment_key)?;
         let recall_engine = configured_recall_engine(paths, &private_vault, &knowledge_vault);
         let profile_digest = fs::read(paths.agent_profile(&agent_id)).map_or_else(
@@ -219,12 +262,14 @@ impl ArtMcpServer {
             knowledge_vault.clone(),
             agent_id.clone(),
             host_binding.clone(),
-        );
+        )
+        .with_auto_memory(auto_memory_config.clone(), private_vault.clone());
         Ok(Self {
             tool_router: Self::tool_router(),
             agent_id,
             host_binding,
             private_vault,
+            auto_memory_config,
             knowledge_vault,
             governance_ui,
             recall_engine,
@@ -347,7 +392,7 @@ impl ArtMcpServer {
 
     #[tool(
         name = "art_memory_capture",
-        description = "Capture a sourced private memory for this bound Agent. The caller cannot choose owner identity, Active status, or assurance outcome."
+        description = "Submit a bounded sourced private memory through unified intake. Omitted capture_origin means agent_initiated and requires value_reason plus enabled automatic memory. user_requested requires a sanitized request_basis and remains available while automatic memory is disabled. Session and turn references are Agent-asserted. The caller cannot choose identity, status, or assurance."
     )]
     pub async fn art_memory_capture(
         &self,
@@ -356,9 +401,6 @@ impl ArtMcpServer {
         self.ensure_running().map_err(tool_error)?;
         if input.no_persist_provenance {
             return Err(tool_error(ArtError::NoPersist));
-        }
-        if input.anchors.is_empty() && !input.unanchored_candidate {
-            return Err(tool_error(ArtError::SourceRequired));
         }
         let anchors: Vec<_> = input
             .anchors
@@ -378,50 +420,127 @@ impl ArtMcpServer {
             })
             .collect::<ArtResult<_>>()
             .map_err(tool_error)?;
-        let captured = match (input.memory_id, input.expected_revision) {
-            (Some(memory_id), Some(expected_revision)) => self
-                .private_vault
-                .revise(
-                    &memory_id,
-                    expected_revision,
-                    &input.title,
-                    &input.summary,
-                    input.payload,
-                    &anchors,
-                    "agent revision",
-                    &input.idempotency_key,
-                )
-                .map_err(tool_error)?,
-            (None, None) => {
-                let scope = parse_scope(&input.scope_type, &input.scope_key).map_err(tool_error)?;
-                let mut memory = MemoryArtifact::new(
+        let scope = parse_scope(input.scope_type, &input.scope_key);
+        let memory = MemoryArtifact::new(
+            self.agent_id.clone(),
+            input.title,
+            input.summary,
+            input.payload,
+            scope,
+            input.sensitivity,
+            Utc::now(),
+        )
+        .map_err(tool_error)?;
+        let result = self
+            .private_vault
+            .intake(
+                &self.auto_memory_config,
+                MemoryIntakeRequest {
+                    capture_origin: input.capture_origin.map(|origin| match origin {
+                        CaptureOrigin::UserRequested => IntakeOrigin::UserRequested,
+                        CaptureOrigin::AgentInitiated => IntakeOrigin::AgentInitiated,
+                    }),
+                    memory,
+                    anchors,
+                    idempotency_key: input.idempotency_key,
+                    attribution: IntakeAttribution::agent_asserted(input.session_id, input.turn_id),
+                    request_basis: input.request_basis,
+                    value_reason: input.value_reason,
+                    target_memory_id: input.memory_id,
+                    expected_revision: input.expected_revision,
+                    hook_trigger_receipt_id: None,
+                },
+            )
+            .map_err(tool_error)?;
+        self.intake_output(&result)
+    }
+
+    #[tool(
+        name = "art_memory_candidate_submit",
+        description = "Submit one structured automatic private-memory Candidate for this bound Agent. The caller cannot choose identity, Active status, policy outcome, or human assurance. Global automatic memory must be enabled."
+    )]
+    pub async fn art_memory_candidate_submit(
+        &self,
+        Parameters(input): Parameters<MemoryCandidateInput>,
+    ) -> Result<Json<ToolOutput>, String> {
+        self.ensure_running().map_err(tool_error)?;
+        if input.candidate_index != 0 || input.trigger_receipt_id.trim().is_empty() {
+            return Err(tool_error(ArtError::InvalidInput(
+                "automatic candidate requires trigger receipt and index 0".into(),
+            )));
+        }
+        let scope = parse_scope(input.scope_type, &input.scope_key);
+        let anchors: Vec<_> = input
+            .anchors
+            .into_iter()
+            .map(|anchor| {
+                SourceAnchor::new_with_source(
                     self.agent_id.clone(),
-                    input.title,
-                    input.summary,
-                    input.payload,
-                    scope,
+                    anchor.kind,
+                    anchor.locator,
+                    anchor.source_version,
+                    anchor.source_digest,
+                    anchor.excerpt,
+                    anchor.metadata,
                     input.sensitivity,
                     Utc::now(),
                 )
-                .map_err(tool_error)?;
-                if !anchors.is_empty() {
-                    memory
-                        .transition(MemoryStatus::Active, Utc::now())
-                        .map_err(tool_error)?;
-                }
-                self.private_vault
-                    .capture(&memory, &anchors, &input.idempotency_key)
-                    .map_err(tool_error)?
-            }
-            _ => {
-                return Err(tool_error(ArtError::InvalidInput(
-                    "memory_id and expected_revision must be supplied together".into(),
-                )));
-            }
-        };
-        Ok(Json(ToolOutput::from_value(
-            json!({"schema":"art.mcp.v1","memory_id":captured.id,"revision":captured.current_revision,"status":captured.status,"content_hash":captured.current_hash,"agent_id":self.agent_id.as_str()}),
-        )?))
+            })
+            .collect::<ArtResult<_>>()
+            .map_err(tool_error)?;
+        let memory = MemoryArtifact::new(
+            self.agent_id.clone(),
+            input.title,
+            input.summary,
+            input.payload,
+            scope,
+            input.sensitivity,
+            Utc::now(),
+        )
+        .map_err(tool_error)?;
+        let result = self
+            .private_vault
+            .intake(
+                &self.auto_memory_config,
+                MemoryIntakeRequest {
+                    capture_origin: Some(IntakeOrigin::HookTriggered),
+                    memory,
+                    anchors,
+                    idempotency_key: format!("hook:{}:0", input.trigger_receipt_id),
+                    attribution: IntakeAttribution::agent_asserted(None, None),
+                    request_basis: None,
+                    value_reason: None,
+                    target_memory_id: None,
+                    expected_revision: None,
+                    hook_trigger_receipt_id: Some(input.trigger_receipt_id),
+                },
+            )
+            .map_err(tool_error)?;
+        self.intake_output(&result)
+    }
+
+    fn intake_output(&self, result: &MemoryIntakeResult) -> Result<Json<ToolOutput>, String> {
+        let memory = result
+            .memory_id
+            .as_deref()
+            .map(|id| self.private_vault.read(id))
+            .transpose()
+            .map_err(tool_error)?;
+        let mut value = serde_json::to_value(result)
+            .map_err(|error| tool_error(ArtError::Internal(error.to_string())))?;
+        value["schema"] = json!("art.memory-intake.result.v1");
+        value["agent_id"] = json!(self.agent_id.as_str());
+        value["outcome"] = json!(result.disposition);
+        value["policy_actor"] = json!("system_policy");
+        value["status"] = json!(memory.as_ref().map(|m| m.status));
+        value["revision"] = json!(memory.as_ref().map(|m| m.current_revision));
+        value["content_hash"] = json!(memory.as_ref().map(|m| &m.current_hash));
+        value["memory_ref"] = json!(
+            memory
+                .as_ref()
+                .map(|m| format!("memory:{}@{}", m.id, m.current_revision))
+        );
+        Ok(Json(ToolOutput::from_value(value)?))
     }
 
     #[tool(
@@ -680,7 +799,7 @@ impl ArtMcpServer {
             .delegation_mode(&self.agent_id, &self.host_binding)
             .map_err(tool_error)?;
         Ok(Json(ToolOutput::from_value(
-            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status,"governance_mode":governance_mode}),
+            json!({"schema":"art.mcp.v1","binary_version":env!("CARGO_PKG_VERSION"),"bound_agent_id":self.agent_id.as_str(),"agent_vault":if integrity{"ok"}else{"error"},"knowledge_index":if pending==0{"ok"}else{"degraded"},"pending_recoveries":pending,"active_requests":1,"map_status":map_status,"private_navigation_aligned":private_navigation_aligned,"knowledge_navigation_aligned":knowledge_navigation_aligned,"vector_status":vector_status,"governance_mode":governance_mode,"auto_memory":self.auto_memory_config.status()}),
         )?))
     }
 }
@@ -1250,17 +1369,14 @@ async fn shutdown_signal() -> ArtResult<()> {
         .map_err(|error| ArtError::Io(error.to_string()))
 }
 
-fn parse_scope(kind: &str, key: &str) -> ArtResult<MemoryScope> {
-    if key.trim().is_empty() {
-        return Err(ArtError::InvalidInput("scope key is required".into()));
-    }
+fn parse_scope(kind: MemoryScopeType, key: &str) -> MemoryScope {
+    // Intake validates fresh scopes after resolving exact historical retries.
     match kind {
-        "session" => Ok(MemoryScope::Session(key.into())),
-        "repository" => Ok(MemoryScope::Repository(key.into())),
-        "workspace" => Ok(MemoryScope::Workspace(key.into())),
-        "machine" => Ok(MemoryScope::Machine(key.into())),
-        "user" => Ok(MemoryScope::User(key.into())),
-        _ => Err(ArtError::InvalidInput("invalid scope".into())),
+        MemoryScopeType::Session => MemoryScope::Session(key.into()),
+        MemoryScopeType::Repository => MemoryScope::Repository(key.into()),
+        MemoryScopeType::Workspace => MemoryScope::Workspace(key.into()),
+        MemoryScopeType::Machine => MemoryScope::Machine(key.into()),
+        MemoryScopeType::User => MemoryScope::User(key.into()),
     }
 }
 
