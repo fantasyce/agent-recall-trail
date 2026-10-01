@@ -121,7 +121,7 @@ knowledge-body digest remained valid after its Applicability field was completed
 
 ## Evidence, cleanup, and boundaries
 
-Retained private evidence includes the gate/performance logs, 39 bounded tool
+Retained private evidence includes the gate/performance logs, 40 bounded tool
 receipts, Doctor output, and lifecycle/cleanup summaries. Receipt extracts omit
 conversation text, capability URLs/tokens, credentials, and filesystem locators.
 
