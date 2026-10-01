@@ -1,4 +1,4 @@
-# ART v0.3.6: selective automatic memory with governed boundaries
+# ART v0.3.7: selective automatic memory with governed boundaries
 
 Status: prepared for review on 2026-09-18.
 
@@ -14,7 +14,7 @@ audit use an ART-owned page opened inside the host. Persistent Agent delegation
 is default-off; when the user enables it, one unambiguous instruction can
 approve and publish atomically with a distinct `AgentDelegated` audit trail.
 
-The v0.3.6 release adds opt-in selective automatic memory without turning every
+The v0.3.7 release adds opt-in selective automatic memory without turning every
 conversation into durable state. A neutral Codex Hook asks the Agent to assess
 long-term value, while ART independently enforces evidence, sensitivity,
 budget, duplicate, conflict, and review boundaries. The release retains the

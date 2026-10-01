@@ -170,7 +170,8 @@ fn target_mac_release_performance_contract() {
     let recall_p50 = percentile_millis(&mut recall_ms, 50);
     let recall_p95 = percentile_millis(&mut recall_ms, 95);
     let recall_p99 = percentile_millis(&mut recall_ms, 99);
-    assert!(recall_p95 < 150, "recall p95 exceeded 150 ms");
+    eprintln!("recall_p50_ms={recall_p50} recall_p95_ms={recall_p95} recall_p99_ms={recall_p99}");
+    assert!(recall_p95 < 150, "recall p95 exceeded 150 ms: {recall_p95}");
 
     let handles: Vec<_> = (0..8)
         .map(|_| {

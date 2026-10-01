@@ -1010,3 +1010,159 @@ fn compose_file_rejects_a_snapshot_when_the_operator_digest_does_not_match() {
     let proposals: serde_json::Value = serde_json::from_slice(&proposals.stdout).unwrap();
     assert_eq!(proposals["proposals"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn dsh_desktop_export_is_self_contained_private_and_never_overwrites() {
+    let root = tempdir().unwrap();
+    let home = root.path().join("ART home with spaces");
+    for args in [
+        vec!["init", "--confirm"],
+        vec![
+            "agent",
+            "create",
+            "--id",
+            "desktop-primary",
+            "--host",
+            "dsh",
+        ],
+    ] {
+        assert!(
+            art()
+                .arg("--home")
+                .arg(&home)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let target = root.path().join("desktop integration");
+    let preview = art()
+        .arg("--home")
+        .arg(&home)
+        .args([
+            "integration",
+            "dsh",
+            "--desktop",
+            "--agent",
+            "desktop-primary",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(value["profile"], "desktop");
+    assert_eq!(value["applied"], false);
+    assert!(!target.exists());
+    let files = value["files"].as_object().unwrap();
+    assert!(
+        files["art.overlay.yml"]
+            .as_str()
+            .unwrap()
+            .contains(home.to_str().unwrap())
+    );
+    assert!(
+        files["art-recall/SKILL.md"]
+            .as_str()
+            .unwrap()
+            .contains("references/private-memory-value-v1.md")
+    );
+    assert!(
+        files["art-recall/references/private-memory-value-v1.md"]
+            .as_str()
+            .unwrap()
+            .contains("private")
+    );
+    assert!(
+        !files["art-recall/SKILL.md"]
+            .as_str()
+            .unwrap()
+            .contains("../../../plugin/")
+    );
+    let applied = art()
+        .arg("--home")
+        .arg(&home)
+        .args([
+            "integration",
+            "dsh",
+            "--desktop",
+            "--agent",
+            "desktop-primary",
+            "--apply",
+            "--output",
+        ])
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    for (name, content) in files {
+        let path = target.join(name);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            content.as_str().unwrap()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    let duplicate = art()
+        .arg("--home")
+        .arg(&home)
+        .args([
+            "integration",
+            "dsh",
+            "--desktop",
+            "--agent",
+            "desktop-primary",
+            "--apply",
+            "--output",
+        ])
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(!duplicate.status.success());
+    assert_eq!(
+        fs::read_to_string(target.join("art.overlay.yml")).unwrap(),
+        files["art.overlay.yml"].as_str().unwrap()
+    );
+    let missing = root.path().join("missing-agent-export");
+    let invalid = art()
+        .arg("--home")
+        .arg(&home)
+        .args([
+            "integration",
+            "dsh",
+            "--desktop",
+            "--agent",
+            "missing-agent",
+            "--apply",
+            "--output",
+        ])
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    assert!(!missing.exists());
+}

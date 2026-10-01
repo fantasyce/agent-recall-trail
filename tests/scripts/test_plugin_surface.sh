@@ -12,7 +12,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 manifest = json.loads((root / ".codex-plugin/plugin.json").read_text())
 assert manifest["name"] == "agent-recall-trail"
-assert manifest["version"] == "0.3.6"
+assert manifest["version"] == "0.3.7"
 assert manifest["skills"] == "./skills/"
 assert manifest["mcpServers"] == "./.mcp.json"
 assert manifest["interface"]["displayName"] == "Agent Recall Trail"

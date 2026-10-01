@@ -1373,6 +1373,10 @@ fn corrupted_knowledge_files_are_degraded_and_never_returned_as_current() {
         vault.read(&edition.edition_id),
         Err(ArtError::IndexDegraded)
     ));
+    assert!(matches!(
+        vault.search_ranked_candidates(&["original".into()], 512),
+        Err(ArtError::IndexDegraded)
+    ));
     assert!(!vault.diagnostics().unwrap().projection_hashes_ok);
     assert!(matches!(
         vault.rebuild_projection(),

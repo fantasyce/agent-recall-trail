@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.7 - Unreleased
+
+- Added an opt-in official DSH desktop integration export with literal MCP
+  paths, a self-contained recall skill and its value-standard reference.
+- Reused the shared retrieval connection for candidate verification while
+  preserving ranking, path confinement, hashes and revocation checks.
+- Documented desktop profile ownership, safe configuration merge, rollback,
+  independent test homes and compatibility with the existing CLI overlay.
+
 ## 0.3.6 - 2026-09-18
 
 - Added a default-off, machine-wide selective automatic-memory switch that is
