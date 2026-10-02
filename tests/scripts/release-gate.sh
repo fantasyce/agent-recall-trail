@@ -11,6 +11,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features -- --test-threads=1
 node tests/scripts/test_governance_intake_ui.mjs
 python3 tests/scripts/test_beir_harness.py
+python3 tests/scripts/test_release_assembly.py
 ART_BIN="$cargo_target_dir/debug/art" bash tests/scripts/test_migration.sh
 cargo test --release -p art-retrieval --test performance_contracts -- --ignored
 bash scripts/build_release_binary.sh

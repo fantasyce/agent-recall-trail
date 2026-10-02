@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.7 - Unreleased
+## 0.3.7 - 2026-10-02
 
 - Added an opt-in official DSH desktop integration export with literal MCP
   paths, a self-contained recall skill and its value-standard reference.

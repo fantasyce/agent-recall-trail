@@ -11,14 +11,27 @@ bins={}
 private_build_paths = re.compile(
     rb'(?:/' + b'Users/[^/\x00]+|/home/' + b'runner|/private/' + b'tmp)/'
 )
+credential_bytes = re.compile(
+    rb'BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY|'
+    rb'AK' + rb'IA[0-9A-Z]{16}|gh' + rb'[pousr]_[A-Za-z0-9]{20,}'
+)
+def scan_member(name, data):
+ parts=pathlib.PurePosixPath(name).parts
+ assert not name.startswith('/') and '..' not in parts, 'unsafe archive path'
+ assert not any(part in {'target', 'node_modules', '__pycache__', '.git', 'tests', '.credentials.yaml'} for part in parts), 'build, test or credential residue in archive'
+ assert not private_build_paths.search(data), 'absolute private build path in archive'
+ assert not credential_bytes.search(data), 'credential-like bytes in archive'
 for t in ('darwin_arm64','linux_amd64'):
  p=d/f'agent-recall-trail_{v}_{t}.tar.gz'; root=f'agent-recall-trail_{v}_{t}'
  with tarfile.open(p,'r:gz') as a:
   ms=a.getmembers(); assert [m.name for m in ms]==sorted(m.name for m in ms); assert all(m.mtime==m.uid==m.gid==0 for m in ms)
+  assert all(m.isfile() for m in ms), 'non-regular archive member'
+  for entry in ms: scan_member(entry.name, a.extractfile(entry).read())
   bins[t]=a.extractfile(f'{root}/art').read(); prov=json.load(a.extractfile(f'{root}/provenance.json'))
   assert prov['version']==v and prov['commit']==c and prov['target']==t and prov['binary_sha256']==hashlib.sha256(bins[t]).hexdigest()
   assert not private_build_paths.search(bins[t]), f'{t} binary contains an absolute build-host path'
 with zipfile.ZipFile(d/f'agent-recall-trail_{v}.mcpb') as a:
+ for name in a.namelist(): scan_member(name, a.read(name))
  assert a.namelist()==sorted(a.namelist()); m=json.loads(a.read('manifest.json'))
  assert m['version']==v
  assert {tool['name'] for tool in m['tools']} == {

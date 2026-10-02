@@ -46,7 +46,16 @@ def aggregate(repo,dist,version,commit):
     sbom={"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":f'agent-recall-trail-{version}',"documentNamespace":f'https://github.com/fantasyce/agent-recall-trail/releases/tag/v{version}#{commit}',"packages":packages}; atomic(dist/'sbom.spdx.json',(json.dumps(sbom,sort_keys=True,separators=(',',':'))+'\n').encode())
     assets=sorted(p for p in dist.iterdir() if p.is_file() and p.name!='SHA256SUMS'); atomic(dist/'SHA256SUMS',''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in assets).encode())
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument('--repo',type=pathlib.Path,required=True); ap.add_argument('--dist',type=pathlib.Path,required=True); ap.add_argument('--version',required=True); ap.add_argument('--commit',required=True); ap.add_argument('--target',required=True); ap.add_argument('--binary',type=pathlib.Path,required=True); a=ap.parse_args()
+    ap=argparse.ArgumentParser(); ap.add_argument('--repo',type=pathlib.Path,required=True); ap.add_argument('--dist',type=pathlib.Path,required=True); ap.add_argument('--version',required=True); ap.add_argument('--commit',required=True); ap.add_argument('--target',choices=('darwin_arm64','linux_amd64')); ap.add_argument('--binary',type=pathlib.Path); ap.add_argument('--assemble-only',action='store_true'); a=ap.parse_args()
     if not re.fullmatch(r'\d+\.\d+\.\d+',a.version) or not re.fullmatch(r'[a-f0-9]{40}',a.commit): raise SystemExit('invalid version or commit')
-    a.dist.mkdir(parents=True,exist_ok=True); tar_asset(a.repo.resolve(),a.dist.resolve(),a.version,a.commit,a.target,a.binary.resolve()); aggregate(a.repo.resolve(),a.dist.resolve(),a.version,a.commit)
+    a.dist.mkdir(parents=True,exist_ok=True)
+    if a.assemble_only:
+        if a.target or a.binary: ap.error('--assemble-only cannot rebuild a native archive')
+        for target in ('darwin_arm64','linux_amd64'):
+            archive=a.dist/f'agent-recall-trail_{a.version}_{target}.tar.gz'
+            if not archive.is_file(): raise SystemExit(f'missing native archive: {archive.name}')
+    else:
+        if not a.target or not a.binary: ap.error('--target and --binary are required for native packaging')
+        tar_asset(a.repo.resolve(),a.dist.resolve(),a.version,a.commit,a.target,a.binary.resolve())
+    aggregate(a.repo.resolve(),a.dist.resolve(),a.version,a.commit)
 if __name__=='__main__': main()
