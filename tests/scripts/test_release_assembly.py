@@ -38,7 +38,7 @@ class AssemblyContract(unittest.TestCase):
             verify = ["bash", str(REPO / "scripts/verify_release_assets.sh"),
                       str(dist), "0.3.7", commit]
             subprocess.run(verify, check=True, capture_output=True)
-            binary.write_bytes(b"fixture " + b"/Users/" + b"synthetic/private-path")
+            binary.write_bytes(b"fixture " + b"/" + b"Users/" + b"synthetic/private-path")
             ASSETS.tar_asset(REPO, dist, "0.3.7", commit, "linux_amd64", binary)
             binary.unlink()
             subprocess.run(args, check=True, capture_output=True)
