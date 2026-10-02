@@ -1,3 +1,5 @@
+mod dsh_desktop;
+
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -416,7 +418,15 @@ enum ReviewCommand {
 #[derive(Debug, Subcommand)]
 enum IntegrationCommand {
     Codex(IntegrationArgs),
-    Dsh(IntegrationArgs),
+    Dsh(DshIntegrationArgs),
+}
+#[derive(Debug, Args)]
+struct DshIntegrationArgs {
+    #[command(flatten)]
+    integration: IntegrationArgs,
+    /// Export a self-contained integration for the Electron-owned desktop profile.
+    #[arg(long)]
+    desktop: bool,
 }
 #[derive(Debug, Args)]
 struct IntegrationArgs {
@@ -1265,8 +1275,12 @@ fn integration_command(paths: &ArtPaths, command: IntegrationCommand) -> ArtResu
                 args,
             )
         }
-        IntegrationCommand::Dsh(args) => {
+        IntegrationCommand::Dsh(dsh_args) => {
+            let args = dsh_args.integration;
             load_profile(paths, &AgentId::from_str(&args.agent)?)?;
+            if dsh_args.desktop {
+                return dsh_desktop::export(paths, &binary, &args);
+            }
             let binary =
                 serde_json::to_string(&binary.to_string_lossy()).map_err(internal_error)?;
             let home =

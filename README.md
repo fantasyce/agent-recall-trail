@@ -2,7 +2,7 @@
 
 ART is a local-first memory and governed-knowledge product for coding agents. Every Agent gets a physically separate private Recall Trail. Stable conclusions become immutable Knowledge Editions that other Agents can retrieve without seeing private source identities or source bodies.
 
-ART `0.3.6` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, cloud sync, bundled model, or autonomous publication is required.
+ART `0.3.7` supports Codex and DeepSeek Harness (DSH) over stdio MCP. It is standalone: no AAA adapter, cloud sync, bundled model, or autonomous publication is required.
 
 ## Product boundary
 
@@ -36,7 +36,7 @@ cargo build --release --locked
 ./target/release/art --home /an/explicit/art-home doctor --agent codex-primary --json
 ```
 
-Use [Codex integration](integrations/codex/README.md) or [DSH integration](integrations/dsh/README.md) to start one bound stdio child. Run `art --help` for the operator CLI.
+Use [Codex integration](integrations/codex/README.md) or [DSH desktop/CLI integration](integrations/dsh/README.md) to start one bound stdio child. Desktop exports include the MCP patch and a self-contained skill: `art integration dsh --desktop --agent <id> --apply --output <new-directory>`. Run `art --help` for the operator CLI.
 
 ## Install
 
@@ -57,7 +57,7 @@ does not edit Codex or DSH configuration. The thin Codex plugin lives under
 `codex-primary`. See [operations](docs/operations.md) before migrating or
 publishing knowledge.
 
-ART 0.3.6 adds opt-in selective automatic memory with a neutral Hook prompt,
+ART 0.3.7 adds opt-in selective automatic memory with a neutral Hook prompt,
 shared Agent/Hook value guidance, bounded budgets, independently verified
 evidence, semantic-similarity review routing, and visible diagnostics. It
 retains the exact accessible proposal-review workspace, eight canonical source-anchor kinds, persistent delegated governance,

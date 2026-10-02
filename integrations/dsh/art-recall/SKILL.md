@@ -54,8 +54,8 @@ Use only `mcp__art__art_*` for ART memory and knowledge operations.
 - Do not store secrets, credentials, raw transcripts, or unapproved third-party content.
 - Propose shared knowledge only when stable, sanitized, and locked to exact source revisions.
 - Read `art_health.governance_mode` first. The default-off `human_review` mode
-  uses `art_governance_ui_open`; open the returned local page in DSH's page or
-  browser surface for settings, review, publication, status, and audit.
+  uses `art_governance_ui_open`; open the returned local page through Desktop's supported link-opening
+  action or browser surface for settings, review, publication, status, and audit.
 - In `delegated_local`, one unambiguous current user request to promote the
   cited memory authorizes one `art_knowledge_governance` call with
   `operation=approve_and_publish`. Supply only Proposal ID and revision. ART

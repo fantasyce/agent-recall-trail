@@ -926,6 +926,10 @@ impl KnowledgeVault {
 
     pub fn read(&self, id: &str) -> ArtResult<EditionRecord> {
         let connection = self.connection()?;
+        self.read_on(&connection, id)
+    }
+
+    fn read_on(&self, connection: &Connection, id: &str) -> ArtResult<EditionRecord> {
         let revoked: Option<i64> = connection
             .query_row(
                 "SELECT revoked FROM edition_projections WHERE edition_id=?1",
@@ -937,7 +941,7 @@ impl KnowledgeVault {
         if revoked != Some(0) {
             return Err(ArtError::NotFound);
         }
-        self.read_including_revoked(id)
+        self.read_including_revoked_on(connection, id)
     }
 
     pub fn list_current(&self) -> ArtResult<Vec<EditionRecord>> {
@@ -982,10 +986,15 @@ impl KnowledgeVault {
         let ids = statement
             .query_map(params![expression, limit], |row| row.get::<_, String>(0))
             .map_err(db_error)?;
-        ids.enumerate()
+        let ids = ids.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+        // Finish the ranked SELECT before hydration so each revocation check
+        // observes current committed state instead of keeping its read snapshot.
+        drop(statement);
+        ids.into_iter()
+            .enumerate()
             .map(|(index, id)| {
                 Ok(RankedEditionCandidate {
-                    edition: self.read(&id.map_err(db_error)?)?,
+                    edition: self.read_on(&connection, &id)?,
                     lexical_rank: index + 1,
                 })
             })
@@ -1737,6 +1746,14 @@ impl KnowledgeVault {
 
     fn read_including_revoked(&self, id: &str) -> ArtResult<EditionRecord> {
         let connection = self.connection()?;
+        self.read_including_revoked_on(&connection, id)
+    }
+
+    fn read_including_revoked_on(
+        &self,
+        connection: &Connection,
+        id: &str,
+    ) -> ArtResult<EditionRecord> {
         let row: Option<EditionRow> = connection.query_row("SELECT knowledge_key,edition_number,title,markdown_path,manifest_path,markdown_sha256,manifest_sha256,published_at FROM edition_projections WHERE edition_id=?1", [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional().map_err(db_error)?;
         let (
             knowledge_key,
