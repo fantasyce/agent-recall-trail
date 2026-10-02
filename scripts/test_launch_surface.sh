@@ -7,6 +7,7 @@ for path in \
   docs/launch/maintainer-outreach.md docs/launch/showcase-submission.md \
   docs/launch/launch-manifest.json packaging/mcp-registry/server.json.in \
   scripts/build_release_binary.sh scripts/build_release_assets.sh scripts/verify_release_assets.sh scripts/open_source_check.sh \
+  .github/ISSUE_TEMPLATE/verified-install.yml \
   .github/workflows/quality.yml .github/workflows/release.yml .github/workflows/publish-mcp.yml; do
   [[ -s "$repo_dir/$path" ]] || { echo "missing launch surface: $path" >&2; exit 1; }
 done
@@ -33,4 +34,14 @@ PY
 for phrase in 'not a transcript store' 'human-reviewed' 'private' 'Codex' 'DSH'; do
   rg -F -q "$phrase" "$repo_dir/docs/launch" || { echo "launch copy missing boundary: $phrase" >&2; exit 1; }
 done
+for phrase in 'Verified install report' 'ART version' 'Host' 'No credentials, private knowledge, or full transcripts'; do
+  rg -F -q "$phrase" "$repo_dir/.github/ISSUE_TEMPLATE/verified-install.yml" || {
+    echo "verified install template missing field: $phrase" >&2
+    exit 1
+  }
+done
+rg -F -q 'issues/new?template=verified-install.yml' "$repo_dir/README.md" || {
+  echo 'README missing verified install report link' >&2
+  exit 1
+}
 echo 'launch surface tests passed'

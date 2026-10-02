@@ -89,8 +89,10 @@ Each project remains separately installable and keeps its own trust boundary.
 
 ## Community feedback
 
-Real Codex and DSH evaluations are especially useful. Share a synthetic or
-redacted workflow in the [design-partner issue](https://github.com/fantasyce/agent-recall-trail/issues/3),
+Real Codex and DSH evaluations are especially useful. A completed installation
+can be recorded with the short [verified install report](https://github.com/fantasyce/agent-recall-trail/issues/new?template=verified-install.yml).
+For a deeper evaluation, share a synthetic or redacted workflow in the
+[design-partner issue](https://github.com/fantasyce/agent-recall-trail/issues/3),
 including the host and ART version, the operation attempted, and the observed
 result. DSH users can also join the
 [official community discussion](https://github.com/deepseek-ai/deepseek-harness/discussions/6479).
